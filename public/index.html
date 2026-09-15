@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sofistai — Consejo de mentores</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <h1>Sofistai</h1>
+        </div>
+        <p class="tagline">Consejo de mentores en la misma sala</p>
+        <button type="button" class="btn ghost" id="btn-settings" hidden>
+          API key
+        </button>
+      </header>
+
+      <main id="main"></main>
+    </div>
+
+    <dialog id="key-dialog">
+      <form method="dialog" id="key-form" class="dialog-body">
+        <h2>API key de OpenRouter</h2>
+        <p class="muted">
+          Se guarda en el archivo <code>.env</code> del proyecto (no en la base
+          de datos).
+        </p>
+        <label>
+          API key
+          <input
+            type="password"
+            id="api-key-input"
+            name="apiKey"
+            autocomplete="off"
+            placeholder="sk-or-..."
+            required
+          />
+        </label>
+        <div class="dialog-actions">
+          <button type="submit" class="btn primary" value="save">Guardar</button>
+        </div>
+        <p class="error" id="key-error" hidden></p>
+      </form>
+    </dialog>
+
+    <dialog id="models-dialog">
+      <div class="dialog-body models-dialog">
+        <h2>Elegir modelos mentores</h2>
+        <p class="muted">
+          Lista desde OpenRouter. Marca los que quieras en la sala.
+        </p>
+        <input
+          type="search"
+          id="models-search"
+          placeholder="Buscar por nombre o id…"
+          autocomplete="off"
+        />
+        <div id="models-status" class="muted"></div>
+        <div id="models-list" class="models-list" role="list"></div>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" id="models-cancel">
+            Cancelar
+          </button>
+          <button type="button" class="btn primary" id="models-confirm">
+            Confirmar
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

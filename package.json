@@ -1,0 +1,30 @@
+{
+  "name": "sophistai",
+  "version": "0.1.0",
+  "description": "Consejo local de mentores vía OpenRouter",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Claviata/sophistai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Claviata/sophistai/issues"
+  },
+  "homepage": "https://github.com/Claviata/sophistai#readme",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch-path=server --watch-preserve-output server/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dompurify": "^3.4.15",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "marked": "^18.0.12"
+  }
+}

@@ -10,6 +10,7 @@ import {
   insertCandidate,
   insertUserMessage,
   selectCandidate,
+  unselectCandidate,
   dismissPendingCandidates,
 } from '../db.js';
 import { conversationLog } from '../debug.js';
@@ -259,6 +260,57 @@ router.post('/select', (req, res) => {
     });
   } catch (err) {
     conversationLog(conversationId, 'select.error', { error: err.message });
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+router.post('/unselect', (req, res) => {
+  const conversationId = Number(req.params.id);
+  try {
+    const conversation = getConversation(conversationId);
+    if (!conversation) {
+      conversationLog(conversationId, 'unselect.rejected', {
+        reason: 'not_found',
+      });
+      return res.status(404).json({ error: 'Conversación no encontrada' });
+    }
+
+    const candidateId = Number(req.body?.candidate_id);
+    if (!candidateId) {
+      conversationLog(conversationId, 'unselect.rejected', {
+        reason: 'missing_candidate_id',
+      });
+      return res.status(400).json({ error: 'candidate_id es obligatorio' });
+    }
+
+    conversationLog(conversationId, 'unselect.requested', { candidateId });
+
+    const result = unselectCandidate(candidateId, conversationId);
+    if (!result) {
+      conversationLog(conversationId, 'unselect.rejected', {
+        reason: 'candidate_not_found',
+        candidateId,
+      });
+      return res.status(404).json({ error: 'Candidata no encontrada' });
+    }
+
+    conversationLog(conversationId, 'unselect.committed', {
+      candidateId: result.candidate.id,
+      mentorId: result.candidate.mentor_id,
+      mentorName: result.candidate.mentor_name,
+    });
+
+    res.json({
+      candidate: result.candidate,
+      messages: result.messages,
+      roundCandidates: result.roundCandidates,
+      pendingCandidates: result.roundCandidates.filter(
+        (c) => c.status === 'pending' || c.status === 'rejected'
+      ),
+      discardedCandidates: getDiscardedCandidates(conversationId),
+    });
+  } catch (err) {
+    conversationLog(conversationId, 'unselect.error', { error: err.message });
     res.status(err.status || 400).json({ error: err.message });
   }
 });

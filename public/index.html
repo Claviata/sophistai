@@ -3,40 +3,91 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sophistaí — Consejo de mentores</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap"
-      rel="stylesheet"
-    />
+    <title>Sophistaí</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="app">
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <h1>Sophistaí</h1>
+    <!--
+      THESIS: A local mentor council that wears the LLM chat shell people already know, and refuses the centered card-page, pill chrome, and serif marketing of the previous UI.
+      OWN-WORLD: Light paper — canvas #fff, sidebar #f3f3f3, hairline #e6e6e6/#d8d8d8, type and actions #555 not black; 1px borders; radius 0; system-ui.
+      STORY: Sit down, open a sala, pick models, send; choose which opinions enter the thread without learning a new product.
+      FIRST VIEWPORT: Full-height two columns — ~260px sidebar (Nueva, Buscar, salas, API key) and a canvas whose empty state is the wordmark plus a sticky composer; primary action is the composer.
+      FORM: Canon ChatGPT/Claude topology, light gray paper, hard edges; no concept-seed (canon path).
+      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+    -->
+    <div id="app" class="app">
+      <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+          <p class="wordmark" lang="el">σοφισταί</p>
+          <button
+            type="button"
+            class="btn ghost icon-only"
+            id="btn-collapse"
+            aria-label="Ocultar salas"
+          >
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 3h10v10H3zM6.5 3v10" />
+            </svg>
+          </button>
         </div>
-        <p class="tagline">Consejo de mentores en la misma sala</p>
-        <button type="button" class="btn ghost" id="btn-settings" hidden>
-          API key
-        </button>
-      </header>
-
-      <main id="main"></main>
+        <div class="sidebar-head">
+          <button type="button" class="btn primary btn-block" id="btn-new">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
+            Nueva
+          </button>
+          <label class="sidebar-search">
+            <span class="sr-only">Buscar</span>
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5 14 14" />
+            </svg>
+            <input
+              type="search"
+              id="sidebar-search"
+              placeholder="Buscar"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <nav class="sala-nav" id="sala-nav" aria-label="Salas"></nav>
+        <div class="sidebar-foot">
+          <button type="button" class="btn ghost btn-block" id="btn-settings">
+            API key
+          </button>
+        </div>
+      </aside>
+      <div class="workspace">
+        <main id="main"></main>
+      </div>
+      <aside class="params" id="params" aria-label="Parámetros">
+        <div class="params-head">
+          <p class="params-title">Parámetros</p>
+          <button
+            type="button"
+            class="btn ghost icon-only"
+            id="btn-params-collapse"
+            aria-label="Ocultar parámetros"
+          >
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 2v12M2 7h4M8 2v12M6 10h4M12 2v12M10 5h4" />
+            </svg>
+          </button>
+        </div>
+        <div class="params-body" id="params-body"></div>
+      </aside>
     </div>
 
     <dialog id="key-dialog">
       <form method="dialog" id="key-form" class="dialog-body">
-        <h2>API key de OpenRouter</h2>
+        <h2>API key</h2>
         <p class="muted">
-          Se guarda en el archivo <code>.env</code> del proyecto (no en la base
-          de datos).
+          Se guarda en <code>.env</code> del proyecto, no en la base de datos.
         </p>
         <label>
-          API key
+          OpenRouter
           <input
             type="password"
             id="api-key-input"
@@ -55,14 +106,12 @@
 
     <dialog id="models-dialog">
       <div class="dialog-body models-dialog">
-        <h2>Elegir modelos mentores</h2>
-        <p class="muted">
-          Lista desde OpenRouter. Marca los que quieras en la sala.
-        </p>
+        <h2>Modelos</h2>
+        <p class="muted">Catálogo de OpenRouter. Marca los mentores de esta sala.</p>
         <input
           type="search"
           id="models-search"
-          placeholder="Buscar por nombre o id…"
+          placeholder="Buscar"
           autocomplete="off"
         />
         <div id="models-status" class="muted"></div>
@@ -76,6 +125,17 @@
           </button>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="delete-dialog">
+      <form method="dialog" id="delete-form" class="dialog-body">
+        <h2>¿Eliminar?</h2>
+        <p class="muted" id="delete-copy"></p>
+        <div class="dialog-actions">
+          <button type="submit" class="btn ghost" value="cancel">Cancelar</button>
+          <button type="submit" class="btn danger" value="delete">Eliminar</button>
+        </div>
+      </form>
     </dialog>
 
     <script type="module" src="/app.js"></script>

@@ -331,7 +331,7 @@ export function getPendingCandidates(conversationId, userMessageId = null) {
  * pending or rejected (not yet dismissed) opinions to review/rescue.
  */
 export function getRoundCandidates(conversationId) {
-  const row = db
+  let row = db
     .prepare(
       `SELECT user_message_id
        FROM candidates
@@ -341,6 +341,23 @@ export function getRoundCandidates(conversationId) {
        LIMIT 1`
     )
     .get(conversationId);
+
+  if (!row) {
+    row = db
+      .prepare(
+        `SELECT user_message_id
+         FROM candidates
+         WHERE conversation_id = ?
+           AND status = 'selected'
+           AND user_message_id NOT IN (
+             SELECT user_message_id FROM candidates
+             WHERE conversation_id = ? AND status = 'dismissed'
+           )
+         ORDER BY user_message_id DESC, id DESC
+         LIMIT 1`
+      )
+      .get(conversationId, conversationId);
+  }
   if (!row) return [];
 
   return db
@@ -410,6 +427,57 @@ export function selectCandidate(candidateId, conversationId) {
   });
 
   return select(candidateId, conversationId);
+}
+
+export function unselectCandidate(candidateId, conversationId) {
+  const unselect = db.transaction((id, convId) => {
+    const candidate = getCandidate(id);
+    if (!candidate) return null;
+    if (Number(candidate.conversation_id) !== Number(convId)) {
+      throw Object.assign(new Error('Candidata de otra conversación'), {
+        status: 400,
+      });
+    }
+    if (candidate.status !== 'selected') {
+      throw new Error('Esta opinión no está elegida');
+    }
+
+    const siblings = db
+      .prepare(
+        `SELECT status FROM candidates
+         WHERE conversation_id = ? AND user_message_id = ?`
+      )
+      .all(convId, candidate.user_message_id);
+    if (siblings.some((s) => s.status === 'dismissed')) {
+      throw new Error('La ronda ya se cerró');
+    }
+
+    const inserted = db
+      .prepare(
+        `SELECT id FROM messages
+         WHERE conversation_id = ?
+           AND role = 'mentor'
+           AND mentor_id = ?
+           AND content = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      )
+      .get(convId, candidate.mentor_id, candidate.content);
+    if (inserted) {
+      deleteMessage(inserted.id, convId);
+    }
+
+    db.prepare(`UPDATE candidates SET status = 'pending' WHERE id = ?`).run(id);
+    touchConversation(convId);
+
+    return {
+      candidate: getCandidate(id),
+      messages: getMessages(convId),
+      roundCandidates: getRoundCandidates(convId),
+    };
+  });
+
+  return unselect(candidateId, conversationId);
 }
 
 export function dismissPendingCandidates(conversationId) {

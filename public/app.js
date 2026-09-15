@@ -1,22 +1,41 @@
 import { marked } from '/vendor/marked/marked.esm.js';
 import DOMPurify from '/vendor/dompurify/purify.es.mjs';
 
+const appEl = document.getElementById('app');
 const main = document.getElementById('main');
+const sidebar = document.getElementById('sidebar');
+const btnCollapse = document.getElementById('btn-collapse');
+const paramsBody = document.getElementById('params-body');
+const btnParamsCollapse = document.getElementById('btn-params-collapse');
+const salaNav = document.getElementById('sala-nav');
+const sidebarSearch = document.getElementById('sidebar-search');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
 const keyDialog = document.getElementById('key-dialog');
 const keyForm = document.getElementById('key-form');
 const keyInput = document.getElementById('api-key-input');
 const keyError = document.getElementById('key-error');
 const btnSettings = document.getElementById('btn-settings');
+const btnNew = document.getElementById('btn-new');
 const modelsDialog = document.getElementById('models-dialog');
 const modelsSearch = document.getElementById('models-search');
 const modelsList = document.getElementById('models-list');
 const modelsStatus = document.getElementById('models-status');
 const modelsCancel = document.getElementById('models-cancel');
 const modelsConfirm = document.getElementById('models-confirm');
+const deleteDialog = document.getElementById('delete-dialog');
+const deleteForm = document.getElementById('delete-form');
+const deleteCopy = document.getElementById('delete-copy');
+
+const LANG_KEY = 'sophistai.language';
+
+const ICON_MENU = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>`;
+const ICON_MORE = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5h.01M8 8h.01M8 12.5h.01" stroke-width="3"/></svg>`;
+const ICON_SEND = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13 13 8 3 3v4l6 1-6 1z"/></svg>`;
+const ICON_EQ = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M2 7h4M8 2v12M6 10h4M12 2v12M10 5h4"/></svg>`;
 
 const state = {
   apiKeyConfigured: false,
-  view: 'list', // list | room
+  view: 'list',
   conversations: [],
   conversation: null,
   mentors: [],
@@ -24,13 +43,19 @@ const state = {
   roundCandidates: [],
   pendingCandidates: [],
   discardedCandidates: [],
-  roomTab: 'conversation', // conversation | discarded
+  roomTab: 'conversation',
+  draftTabId: null,
   loading: false,
   error: '',
   modelsCache: [],
   selectedModelIds: new Set(),
   modelsLoading: false,
   keyRequired: false,
+  sidebarQuery: '',
+  sidebarCollapsed: window.matchMedia('(max-width: 768px)').matches,
+  paramsCollapsed: window.matchMedia('(max-width: 768px)').matches,
+  composerDraft: '',
+  deleteId: null,
 };
 
 async function api(path, options = {}) {
@@ -84,20 +109,123 @@ function renderMarkdown(text) {
 
 function formatDate(iso) {
   try {
-    return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleString('es');
+    return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleString('es', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    });
   } catch {
     return iso;
   }
 }
 
 function languageLabel(lang) {
-  return lang === 'en' ? 'Inglés' : 'Español';
+  return lang === 'en' ? 'EN' : 'ES';
+}
+
+function preferredLanguage() {
+  try {
+    const stored = localStorage.getItem(LANG_KEY);
+    if (stored === 'en' || stored === 'es') return stored;
+  } catch {
+    /* ignore */
+  }
+  return 'es';
+}
+
+function rememberLanguage(lang) {
+  try {
+    localStorage.setItem(LANG_KEY, lang === 'en' ? 'en' : 'es');
+  } catch {
+    /* ignore */
+  }
+}
+
+function snapshotComposer() {
+  const area = document.querySelector('#compose-form textarea');
+  if (area) state.composerDraft = area.value;
+}
+
+function restoreComposer() {
+  const area = document.querySelector('#compose-form textarea');
+  if (area && state.composerDraft) {
+    area.value = state.composerDraft;
+    resizeComposer(area);
+  }
+}
+
+function resizeComposer(area) {
+  area.style.height = 'auto';
+  const min = 33.6;
+  area.style.height = `${Math.max(min, Math.min(area.scrollHeight, 192))}px`;
+}
+
+function isNarrow() {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function inRoom() {
+  return state.view === 'room' && Boolean(state.conversation);
+}
+
+function syncShell() {
+  appEl.classList.toggle('sidebar-collapsed', state.sidebarCollapsed);
+  appEl.classList.toggle('params-collapsed', state.paramsCollapsed);
+  appEl.classList.toggle('has-params', inRoom());
+  const overlay =
+    isNarrow() &&
+    (!state.sidebarCollapsed || (inRoom() && !state.paramsCollapsed));
+  sidebarBackdrop.hidden = !overlay;
+}
+
+function closeSidebar() {
+  state.sidebarCollapsed = true;
+  syncShell();
+}
+
+function openSidebar() {
+  state.sidebarCollapsed = false;
+  if (isNarrow()) state.paramsCollapsed = true;
+  syncShell();
+}
+
+function toggleSidebar() {
+  if (state.sidebarCollapsed) openSidebar();
+  else closeSidebar();
+}
+
+function closeSidebarIfNarrow() {
+  if (isNarrow()) closeSidebar();
+}
+
+function closeParams() {
+  state.paramsCollapsed = true;
+  syncShell();
+}
+
+function openParams() {
+  state.paramsCollapsed = false;
+  if (isNarrow()) state.sidebarCollapsed = true;
+  syncShell();
+}
+
+function toggleParams() {
+  if (state.paramsCollapsed) openParams();
+  else closeParams();
+}
+
+const WORDMARK_HEAD = `<p class="wordmark wordmark-head" lang="el">σοφισταί</p>`;
+
+function roomHeadMenuHtml() {
+  return `
+        <button type="button" class="btn ghost icon-only btn-menu" id="btn-menu" aria-label="Mostrar salas">
+          ${ICON_MENU}
+        </button>
+        ${WORDMARK_HEAD}`;
 }
 
 async function refreshKeyStatus() {
   const data = await api('/api/settings/key');
   state.apiKeyConfigured = Boolean(data.configured);
-  btnSettings.hidden = false;
   return state.apiKeyConfigured;
 }
 
@@ -106,7 +234,7 @@ async function loadConversations() {
   state.conversations = data.conversations || [];
 }
 
-async function loadRoom(id) {
+async function loadRoom(id, { keepDraft = false } = {}) {
   const data = await api(`/api/conversations/${id}`);
   state.conversation = data.conversation;
   state.mentors = data.mentors || [];
@@ -119,6 +247,24 @@ async function loadRoom(id) {
     );
   state.discardedCandidates = data.discardedCandidates || [];
   state.view = 'room';
+  state.roomTab = 'conversation';
+  if (!keepDraft) state.composerDraft = '';
+  const firstOpen = state.roundCandidates.find(
+    (c) => c.status === 'pending' || c.status === 'rejected'
+  );
+  state.draftTabId = (firstOpen || state.roundCandidates[0] || {}).id ?? null;
+}
+
+async function createRoom() {
+  const data = await api('/api/conversations', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: 'Nueva sala',
+      language: preferredLanguage(),
+    }),
+  });
+  await loadConversations();
+  await loadRoom(data.conversation.id, { keepDraft: true });
 }
 
 function openKeyDialog({ required = false } = {}) {
@@ -155,6 +301,35 @@ keyForm.addEventListener('submit', async (event) => {
 
 btnSettings.addEventListener('click', () => openKeyDialog());
 
+btnNew.addEventListener('click', async () => {
+  if (!state.apiKeyConfigured) {
+    openKeyDialog({ required: true });
+    return;
+  }
+  try {
+    state.error = '';
+    await createRoom();
+    closeSidebarIfNarrow();
+    render();
+  } catch (err) {
+    state.error = err.message;
+    render();
+  }
+});
+
+sidebarSearch.addEventListener('input', () => {
+  state.sidebarQuery = sidebarSearch.value;
+  renderSidebar();
+});
+
+btnCollapse.addEventListener('click', closeSidebar);
+btnParamsCollapse.addEventListener('click', closeParams);
+sidebarBackdrop.addEventListener('click', () => {
+  closeSidebar();
+  closeParams();
+});
+syncShell();
+
 modelsCancel.addEventListener('click', () => modelsDialog.close());
 
 modelsSearch.addEventListener('input', () => renderModelsList());
@@ -180,7 +355,7 @@ modelsConfirm.addEventListener('click', async () => {
   }));
 
   try {
-    modelsStatus.textContent = 'Guardando mentores…';
+    modelsStatus.textContent = 'Guardando…';
     const data = await api(
       `/api/conversations/${state.conversation.id}/mentors`,
       {
@@ -193,11 +368,56 @@ modelsConfirm.addEventListener('click', async () => {
     state.pendingCandidates = [];
     state.discardedCandidates = state.discardedCandidates || [];
     modelsDialog.close();
-    render();
+    const pendingSend = state.composerDraft.trim();
+    if (pendingSend && state.conversation && state.mentors.length > 0) {
+      await sendTurn(pendingSend);
+    } else {
+      render();
+    }
   } catch (err) {
     modelsStatus.textContent = err.message;
   }
 });
+
+deleteForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const value = event.submitter?.value;
+  if (value !== 'delete' || !state.deleteId) {
+    state.deleteId = null;
+    deleteDialog.close();
+    return;
+  }
+  const id = state.deleteId;
+  try {
+    await api(`/api/conversations/${id}`, { method: 'DELETE' });
+    if (state.conversation?.id === id) {
+      state.view = 'list';
+      state.conversation = null;
+      state.mentors = [];
+      state.messages = [];
+      state.roundCandidates = [];
+      state.pendingCandidates = [];
+      state.discardedCandidates = [];
+    }
+    state.deleteId = null;
+    deleteDialog.close();
+    await loadConversations();
+    render();
+  } catch (err) {
+    state.error = err.message;
+    deleteDialog.close();
+    render();
+  }
+});
+
+function selectedModelCaption(mentor) {
+  const id = String(mentor.model_id || '');
+  const cached = state.modelsCache.find((x) => x.id === id);
+  if (cached?.name && cached.name !== id) {
+    return `${cached.name} · ${id}`;
+  }
+  return id;
+}
 
 function defaultMentorName(model, index) {
   const base = (model.name || model.id || `Mentor ${index + 1}`)
@@ -229,12 +449,12 @@ function renderModelsList() {
       );
 
   if (state.modelsLoading) {
-    modelsList.innerHTML = `<div class="empty">Cargando modelos…</div>`;
+    modelsList.innerHTML = `<div class="pane-empty">Cargando…</div>`;
     return;
   }
 
   if (filtered.length === 0) {
-    modelsList.innerHTML = `<div class="empty">No hay modelos para mostrar.</div>`;
+    modelsList.innerHTML = `<div class="pane-empty">Nada que mostrar.</div>`;
     return;
   }
 
@@ -278,8 +498,7 @@ async function openModelsModal() {
       (c) => c.status === 'pending' || c.status === 'rejected'
     )
   ) {
-    state.error =
-      'Hay opiniones por revisar. Selecciona las que quieras o pulsa Continuar.';
+    state.error = 'Hay opiniones por revisar. Elige o pulsa Continuar.';
     render();
     return;
   }
@@ -303,109 +522,10 @@ async function openModelsModal() {
   }
 }
 
-function renderListView() {
-  const items =
-    state.conversations.length === 0
-      ? `<div class="empty">Aún no hay salas. Crea la primera.</div>`
-      : `<ul class="conversation-list">
-          ${state.conversations
-            .map(
-              (c) => `
-            <li>
-              <button type="button" class="item" data-open="${c.id}">
-                <span class="item-title">${escapeHtml(c.title)}</span>
-                <span class="item-meta">${languageLabel(c.language)} · ${escapeHtml(
-                  formatDate(c.updated_at)
-                )}</span>
-              </button>
-            </li>`
-            )
-            .join('')}
-        </ul>`;
-
-  main.innerHTML = `
-    <section class="panel stack">
-      <div class="row spread">
-        <div>
-          <h2 class="section-title">Tus salas</h2>
-          <p class="hint">Cada sala es un consejo de mentores que escuchan juntos.</p>
-        </div>
-        <button type="button" class="btn primary" id="btn-new">Nueva sala</button>
-      </div>
-      ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
-      ${items}
-    </section>
-  `;
-
-  document.getElementById('btn-new')?.addEventListener('click', () => {
-    renderCreateForm();
-  });
-
-  main.querySelectorAll('[data-open]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        state.error = '';
-        await loadRoom(Number(btn.getAttribute('data-open')));
-        render();
-      } catch (err) {
-        state.error = err.message;
-        render();
-      }
-    });
-  });
-}
-
-function renderCreateForm() {
-  main.innerHTML = `
-    <section class="panel stack">
-      <h2 class="section-title">Nueva sala</h2>
-      <p class="hint">Elige el idioma de la conversación. Los system prompts de los mentores siempre van en inglés.</p>
-      <form id="create-form" class="stack">
-        <label>
-          Título
-          <input type="text" name="title" value="Nueva sala" required />
-        </label>
-        <label>
-          Idioma de la conversación
-          <select name="language">
-            <option value="es" selected>Español</option>
-            <option value="en">Inglés</option>
-          </select>
-        </label>
-        <div class="row">
-          <button type="button" class="btn ghost" id="btn-cancel-create">Cancelar</button>
-          <button type="submit" class="btn primary">Crear</button>
-        </div>
-        <p class="error" id="create-error" hidden></p>
-      </form>
-    </section>
-  `;
-
-  document.getElementById('btn-cancel-create')?.addEventListener('click', () => {
-    state.view = 'list';
-    render();
-  });
-
-  document.getElementById('create-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const errEl = document.getElementById('create-error');
-    errEl.hidden = true;
-    try {
-      const data = await api('/api/conversations', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: form.title.value,
-          language: form.language.value,
-        }),
-      });
-      await loadRoom(data.conversation.id);
-      render();
-    } catch (err) {
-      errEl.textContent = err.message;
-      errEl.hidden = false;
-    }
-  });
+function askDelete(conversation) {
+  state.deleteId = conversation.id;
+  deleteCopy.textContent = `Se eliminará «${conversation.title}».`;
+  deleteDialog.showModal();
 }
 
 async function saveMentorName(mentorId, name) {
@@ -420,265 +540,218 @@ async function saveMentorName(mentorId, name) {
   if (idx >= 0) state.mentors[idx] = data.mentor;
 }
 
-function renderRoomView() {
+async function saveRoomMeta({ title, language }) {
   const c = state.conversation;
-  const tab = state.roomTab || 'conversation';
+  const data = await api(`/api/conversations/${c.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      title: title ?? c.title,
+      language: language ?? c.language,
+    }),
+  });
+  state.conversation = data.conversation;
+  rememberLanguage(data.conversation.language);
+  await loadConversations();
+}
+
+function composerDisabled() {
   const round = state.roundCandidates || [];
-  const discarded = state.discardedCandidates || [];
-  const openChoices = round.filter(
+  const hasPending = round.some(
     (x) => x.status === 'pending' || x.status === 'rejected'
   );
-  const hasPending = openChoices.length > 0;
-  const hasRound = round.length > 0;
+  return hasPending || state.loading;
+}
 
-  const mentorsHtml =
-    state.mentors.length === 0
-      ? `<div class="empty">Todavía no hay mentores. Elige modelos para la sala.</div>`
-      : state.mentors
-          .map(
-            (m) => `
-        <div class="mentor-card" data-mentor="${m.id}">
-          <label>
-            Seudónimo
-            <input type="text" class="mentor-name" value="${escapeHtml(m.name)}" />
-          </label>
-          <div class="model-id">${escapeHtml(m.model_id)}</div>
-        </div>`
-          )
-          .join('');
-
-  const messagesHtml =
-    state.messages.length === 0
-      ? `<div class="empty">La sala está en silencio. Empieza la conversación.</div>`
-      : `<div class="messages">
-          ${state.messages
-            .map((msg) => {
-              const who =
-                msg.role === 'user' ? 'Tú' : msg.mentor_name || 'Mentor';
-              const cls = msg.role === 'user' ? 'user' : 'mentor';
-              return `<article class="bubble ${cls}">
-                <div class="who">${escapeHtml(who)}</div>
-                <div class="body md">${renderMarkdown(msg.content)}</div>
-              </article>`;
-            })
-            .join('')}
-        </div>`;
-
-  const candidatesHtml = !hasRound
-    ? ''
-    : `
-      <section class="stack">
-        <h3 class="section-title">Opiniones del consejo</h3>
-        <p class="hint">Puedes elegir una o varias. Las no elegidas pasan a Descartadas al continuar.</p>
-        <div class="candidates">
-          ${round
-            .map((cand) => {
-              const selected = cand.status === 'selected';
-              return `
-            <article class="candidate ${selected ? 'is-selected' : ''}">
-              <header>
-                <div>
-                  <div class="name">${escapeHtml(cand.mentor_name)}</div>
-                  <div class="model">${escapeHtml(cand.model_id)}</div>
-                </div>
-                ${
-                  selected
-                    ? `<span class="badge chosen">Elegida</span>`
-                    : `<button type="button" class="btn primary small" data-select="${cand.id}">
-                        Elegir esta
-                      </button>`
-                }
-              </header>
-              <div class="body md">${renderMarkdown(cand.content)}</div>
-            </article>`;
-            })
-            .join('')}
-        </div>
-        ${
-          hasPending
-            ? `<div class="row">
-                <button type="button" class="btn ghost" id="btn-dismiss">
-                  Continuar sin elegir más
-                </button>
-              </div>`
-            : ''
-        }
-      </section>`;
-
-  const discardedGrouped = discarded.reduce((acc, cand) => {
-    const key = String(cand.user_message_id);
-    if (!acc[key]) acc[key] = { prompt: cand.user_prompt || '', items: [] };
-    acc[key].items.push(cand);
-    return acc;
-  }, {});
-
-  const discardedHtml =
-    discarded.length === 0
-      ? `<div class="empty">No hay opiniones descartadas todavía.</div>`
-      : `<div class="stack discarded-list">
-          ${Object.entries(discardedGrouped)
-            .map(
-              ([, group]) => `
-            <section class="discarded-group stack">
-              <p class="discarded-prompt muted">
-                <strong>Ante:</strong> ${escapeHtml(
-                  group.prompt.length > 180
-                    ? `${group.prompt.slice(0, 180)}…`
-                    : group.prompt
-                )}
-              </p>
-              <div class="candidates">
-                ${group.items
-                  .map(
-                    (cand) => `
-                  <article class="candidate is-discarded">
-                    <header>
-                      <div>
-                        <div class="name">${escapeHtml(cand.mentor_name)}</div>
-                        <div class="model">${escapeHtml(cand.model_id)}</div>
-                      </div>
-                      <span class="badge">Solo lectura</span>
-                    </header>
-                    <div class="body md">${renderMarkdown(cand.content)}</div>
-                  </article>`
-                  )
-                  .join('')}
-              </div>
-            </section>`
-            )
-            .join('')}
-        </div>`;
-
-  const conversationPanel = `
-      <div class="panel stack">
-        ${messagesHtml}
-        ${
-          state.loading
-            ? `<div class="status-banner">Consultando mentores…</div>`
-            : ''
-        }
-        ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
-        ${candidatesHtml}
-        <form id="compose-form" class="composer">
-          <label>
-            Tu intervención
-            <textarea name="content" placeholder="Habla con el consejo…" ${
-              hasPending || state.loading || state.mentors.length === 0
-                ? 'disabled'
-                : ''
-            } required></textarea>
-          </label>
-          <div class="row">
-            <button type="submit" class="btn primary" ${
-              hasPending || state.loading || state.mentors.length === 0
-                ? 'disabled'
-                : ''
-            }>
-              Enviar al consejo
-            </button>
-          </div>
-          ${
-            hasPending
-              ? `<div class="status-banner warn">Selecciona una o más opiniones, o Continuar para cerrar la ronda.</div>`
-              : ''
-          }
-        </form>
-      </div>`;
-
-  const discardedPanel = `
-      <div class="panel stack">
-        <p class="hint">Archivo de opiniones no elegidas. Solo lectura; no se reintroducen al hilo.</p>
-        ${discardedHtml}
-      </div>`;
-
-  main.innerHTML = `
-    <section class="stack">
-      <div class="row spread">
-        <button type="button" class="btn ghost" id="btn-back">← Salas</button>
-        <span class="badge">${languageLabel(c.language)}</span>
-      </div>
-
-      <div class="panel stack">
-        <div class="row spread">
-          <div>
-            <h2 class="section-title">${escapeHtml(c.title)}</h2>
-            <p class="hint">Mentores en la sala</p>
-          </div>
-          <div class="row">
-            <button type="button" class="btn ghost" id="btn-models" ${
-              hasPending ? 'disabled' : ''
-            }>Elegir modelos</button>
-            <button type="button" class="btn danger small" id="btn-delete">Eliminar</button>
-          </div>
-        </div>
-        <form id="meta-form" class="row">
-          <label style="flex:1;min-width:12rem">
-            Título
-            <input type="text" name="title" value="${escapeHtml(c.title)}" required />
-          </label>
-          <label>
-            Idioma
-            <select name="language">
-              <option value="es" ${c.language === 'es' ? 'selected' : ''}>Español</option>
-              <option value="en" ${c.language === 'en' ? 'selected' : ''}>Inglés</option>
-            </select>
-          </label>
-          <button type="submit" class="btn ghost small">Guardar</button>
-        </form>
-        <div class="stack">${mentorsHtml}</div>
-      </div>
-
-      <div class="tabs" role="tablist">
-        <button type="button" class="tab ${
-          tab === 'conversation' ? 'active' : ''
-        }" data-tab="conversation" role="tab">
-          Conversación
-        </button>
-        <button type="button" class="tab ${
-          tab === 'discarded' ? 'active' : ''
-        }" data-tab="discarded" role="tab">
-          Descartadas${
-            discarded.length ? ` (${discarded.length})` : ''
-          }
-        </button>
-      </div>
-
-      ${tab === 'discarded' ? discardedPanel : conversationPanel}
-    </section>
+function composerHtml() {
+  const disabled = composerDisabled() ? 'disabled' : '';
+  return `
+    <form id="compose-form" class="composer">
+      <textarea name="content" rows="1" placeholder="Escribe…" ${disabled}></textarea>
+      <button type="submit" class="btn primary icon-only" aria-label="Enviar" ${disabled}>
+        ${ICON_SEND}
+      </button>
+    </form>
   `;
+}
 
-  document.querySelectorAll('[data-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.roomTab = btn.getAttribute('data-tab');
+function bindComposer() {
+  const form = document.getElementById('compose-form');
+  const area = form?.querySelector('textarea');
+  if (!form || !area) return;
+  restoreComposer();
+  area.addEventListener('input', () => {
+    state.composerDraft = area.value;
+    resizeComposer(area);
+  });
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener('submit', onComposeSubmit);
+}
+
+async function sendTurn(content) {
+  state.error = '';
+  state.loading = true;
+  state.composerDraft = '';
+  render();
+  try {
+    const data = await api(`/api/conversations/${state.conversation.id}/turns`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+    state.messages = [...state.messages, data.userMessage];
+    state.roundCandidates = data.roundCandidates || data.candidates || [];
+    state.pendingCandidates =
+      data.pendingCandidates ||
+      state.roundCandidates.filter(
+        (x) => x.status === 'pending' || x.status === 'rejected'
+      );
+    const firstOpen = state.roundCandidates.find(
+      (c) => c.status === 'pending' || c.status === 'rejected'
+    );
+    state.draftTabId = (firstOpen || state.roundCandidates[0] || {}).id ?? null;
+    if (data.errors?.length) {
+      state.error = data.errors
+        .map((x) => `${x.mentor_name}: ${x.error}`)
+        .join(' · ');
+    }
+    await loadConversations();
+  } catch (err) {
+    state.error = err.message;
+    state.composerDraft = content;
+    if (err.data?.pendingCandidates) {
+      state.pendingCandidates = err.data.pendingCandidates;
+    }
+    if (err.data?.roundCandidates) {
+      state.roundCandidates = err.data.roundCandidates;
+    }
+    if (err.data?.errors?.length) {
+      state.error =
+        err.message +
+        ' · ' +
+        err.data.errors.map((x) => `${x.mentor_name}: ${x.error}`).join(' · ');
+    }
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+async function onComposeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const content = form.content.value.trim();
+  if (!content) return;
+
+  if (!state.apiKeyConfigured) {
+    openKeyDialog({ required: true });
+    return;
+  }
+
+  if (!state.conversation) {
+    state.composerDraft = content;
+    try {
+      await createRoom();
       render();
+      if (state.mentors.length === 0) openModelsModal();
+      else await sendTurn(content);
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+    return;
+  }
+  if (state.mentors.length === 0) {
+    state.composerDraft = content;
+    openModelsModal();
+    return;
+  }
+
+  await sendTurn(content);
+}
+
+function renderSidebar() {
+  const q = state.sidebarQuery.trim().toLowerCase();
+  const items = !q
+    ? state.conversations
+    : state.conversations.filter((c) =>
+        String(c.title).toLowerCase().includes(q)
+      );
+  const activeId = state.conversation?.id;
+
+  if (items.length === 0) {
+    salaNav.innerHTML = `<div class="nav-empty">${
+      state.conversations.length === 0 ? 'Sin salas' : 'Sin coincidencias'
+    }</div>`;
+    return;
+  }
+
+  salaNav.innerHTML = `<ul class="sala-list">
+    ${items
+      .map(
+        (c) => `
+      <li class="sala-item ${c.id === activeId ? 'is-active' : ''}">
+        <button type="button" class="sala-open" data-open="${c.id}">
+          <span class="title">${escapeHtml(c.title)}</span>
+          <span class="meta">${languageLabel(c.language)} · ${escapeHtml(
+            formatDate(c.updated_at)
+          )}</span>
+        </button>
+        <button type="button" class="sala-more" data-delete="${c.id}" aria-label="Eliminar">
+          ${ICON_MORE}
+        </button>
+      </li>`
+      )
+      .join('')}
+  </ul>`;
+
+  salaNav.querySelectorAll('[data-open]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        state.error = '';
+        await loadRoom(Number(btn.getAttribute('data-open')));
+        closeSidebarIfNarrow();
+        render();
+      } catch (err) {
+        state.error = err.message;
+        render();
+      }
     });
   });
 
-  document.getElementById('btn-back')?.addEventListener('click', async () => {
-    state.view = 'list';
-    state.conversation = null;
-    state.roomTab = 'conversation';
-    await loadConversations();
-    render();
+  salaNav.querySelectorAll('[data-delete]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const id = Number(btn.getAttribute('data-delete'));
+      const conv = state.conversations.find((c) => c.id === id);
+      if (conv) askDelete(conv);
+    });
   });
+}
 
-  document.getElementById('btn-models')?.addEventListener('click', () => {
-    openModelsModal();
-  });
+function bindRoomHead() {
+  document.getElementById('btn-menu')?.addEventListener('click', toggleSidebar);
+  document.getElementById('btn-params')?.addEventListener('click', openParams);
 
-  document.getElementById('meta-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
+  const title = document.getElementById('room-title');
+  title?.addEventListener('change', async () => {
     try {
-      state.error = '';
-      const data = await api(`/api/conversations/${c.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          title: form.title.value,
-          language: form.language.value,
-        }),
-      });
-      state.conversation = data.conversation;
+      await saveRoomMeta({ title: title.value });
+      renderSidebar();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
+}
+
+function bindParams() {
+  document.getElementById('room-lang')?.addEventListener('change', async (e) => {
+    try {
+      await saveRoomMeta({ language: e.target.value });
       render();
     } catch (err) {
       state.error = err.message;
@@ -686,25 +759,185 @@ function renderRoomView() {
     }
   });
 
-  document.getElementById('btn-delete')?.addEventListener('click', async () => {
-    if (!confirm('¿Eliminar esta sala?')) return;
-    await api(`/api/conversations/${c.id}`, { method: 'DELETE' });
-    state.view = 'list';
-    state.conversation = null;
-    await loadConversations();
+  document.getElementById('btn-models')?.addEventListener('click', () => {
+    openModelsModal();
+  });
+
+  document.getElementById('btn-discarded')?.addEventListener('click', () => {
+    state.roomTab =
+      state.roomTab === 'discarded' ? 'conversation' : 'discarded';
     render();
   });
 
-  main.querySelectorAll('.mentor-card').forEach((card) => {
-    const mentorId = Number(card.getAttribute('data-mentor'));
-    const input = card.querySelector('.mentor-name');
-    input?.addEventListener('change', async () => {
+  paramsBody.querySelectorAll('[data-mentor]').forEach((input) => {
+    input.addEventListener('change', async () => {
       try {
-        await saveMentorName(mentorId, input.value);
+        await saveMentorName(Number(input.getAttribute('data-mentor')), input.value);
       } catch (err) {
         state.error = err.message;
         render();
       }
+    });
+  });
+}
+
+function renderParams(hasPending) {
+  const c = state.conversation;
+  const tab = state.roomTab || 'conversation';
+  const discarded = state.discardedCandidates || [];
+  const viewingDiscarded = tab === 'discarded';
+  const discardedCopy = viewingDiscarded
+    ? 'Estás viendo las opiniones que no entraron al hilo. Vuelve cuando quieras seguir la conversación.'
+    : 'Las opiniones que no elegiste quedan aparte. Ábrelas para revisarlas sin mezclarlas con el hilo.';
+  const discardedLabel = viewingDiscarded
+    ? 'Volver'
+    : `Ver descartadas${discarded.length ? ` (${discarded.length})` : ''}`;
+  const chips =
+    state.mentors.length === 0
+      ? `<p class="hint-line">Elige modelos.</p>`
+      : `<div class="mentor-chips">
+          ${state.mentors
+            .map(
+              (m) => `
+            <label class="chip">
+              <input type="text" value="${escapeHtml(m.name)}" data-mentor="${m.id}" aria-label="Seudónimo" />
+              <span class="chip-model">${escapeHtml(selectedModelCaption(m))}</span>
+            </label>`
+            )
+            .join('')}
+        </div>`;
+
+  paramsBody.innerHTML = `
+    <label class="params-field">
+      Idioma
+      <select id="room-lang" class="lang-select">
+        <option value="es" ${c.language === 'es' ? 'selected' : ''}>Español</option>
+        <option value="en" ${c.language === 'en' ? 'selected' : ''}>Inglés</option>
+      </select>
+    </label>
+    <div class="params-field">
+      Mentores
+      ${chips}
+    </div>
+    <button type="button" class="btn ghost btn-block" id="btn-models" ${
+      hasPending ? 'disabled' : ''
+    }>Modelos</button>
+    <hr class="params-rule" />
+    <div class="params-field">
+      <p class="params-copy">${discardedCopy}</p>
+      <button type="button" class="btn ghost btn-block ${
+        viewingDiscarded ? 'is-on' : ''
+      }" id="btn-discarded">
+        ${discardedLabel}
+      </button>
+    </div>
+  `;
+  bindParams();
+}
+
+function renderEmptyLanding() {
+  main.innerHTML = `
+    <div class="canvas">
+      <header class="room-head is-bare">
+        ${roomHeadMenuHtml()}
+      </header>
+      <div class="empty-canvas">
+        <div class="inner">
+          <p class="empty-prompt">¿Qué quieres preguntar o discutir hoy?</p>
+          ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
+          ${composerHtml()}
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('btn-menu')?.addEventListener('click', toggleSidebar);
+  bindComposer();
+}
+
+function councilHtml(round, hasPending) {
+  if (!round.length) return '';
+  const activeId =
+    round.some((c) => c.id === state.draftTabId)
+      ? state.draftTabId
+      : round[0].id;
+  const active = round.find((c) => c.id === activeId) || round[0];
+  const selected = active.status === 'selected';
+
+  return `
+    <section class="council">
+      <div class="council-tabs" role="tablist">
+        ${round
+          .map(
+            (cand) => `
+          <button type="button" class="council-tab ${
+            cand.id === active.id ? 'is-active' : ''
+          } ${cand.status === 'selected' ? 'is-chosen' : ''}" data-draft="${cand.id}" role="tab">
+            ${escapeHtml(cand.mentor_name)}
+          </button>`
+          )
+          .join('')}
+      </div>
+      <div class="draft-body md">${renderMarkdown(active.content)}</div>
+      <div class="council-actions">
+        ${
+          selected
+            ? `<button type="button" class="btn brick small" data-unselect="${active.id}">Desmarcar</button>`
+            : `<button type="button" class="btn primary small" data-select="${active.id}">Elegir</button>`
+        }
+        ${
+          hasPending
+            ? `<button type="button" class="btn ghost small" id="btn-dismiss">Continuar</button>`
+            : ''
+        }
+      </div>
+    </section>
+  `;
+}
+
+function discardedHtml(discarded) {
+  if (discarded.length === 0) {
+    return `<div class="pane-empty">Nada descartado.</div>`;
+  }
+  const grouped = discarded.reduce((acc, cand) => {
+    const key = String(cand.user_message_id);
+    if (!acc[key]) acc[key] = { prompt: cand.user_prompt || '', items: [] };
+    acc[key].items.push(cand);
+    return acc;
+  }, {});
+  return `<div class="discarded-list">
+    ${Object.values(grouped)
+      .map(
+        (group) => `
+      <section class="discarded-group">
+        <p class="discarded-prompt muted">${escapeHtml(
+          group.prompt.length > 180
+            ? `${group.prompt.slice(0, 180)}…`
+            : group.prompt
+        )}</p>
+        ${group.items
+          .map(
+            (cand) => `
+          <article class="discarded-item">
+            <header>
+              <strong>${escapeHtml(cand.mentor_name)}</strong>
+              <span class="muted">${escapeHtml(cand.model_id)}</span>
+            </header>
+            <div class="body md">${renderMarkdown(cand.content)}</div>
+          </article>`
+          )
+          .join('')}
+      </section>`
+      )
+      .join('')}
+  </div>`;
+}
+
+function bindCouncil(c) {
+  main.querySelectorAll('[data-draft]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      snapshotComposer();
+      state.draftTabId = Number(btn.getAttribute('data-draft'));
+      render();
     });
   });
 
@@ -713,10 +946,13 @@ function renderRoomView() {
       try {
         state.error = '';
         state.loading = true;
+        snapshotComposer();
         render();
         const data = await api(`/api/conversations/${c.id}/select`, {
           method: 'POST',
-          body: JSON.stringify({ candidate_id: Number(btn.getAttribute('data-select')) }),
+          body: JSON.stringify({
+            candidate_id: Number(btn.getAttribute('data-select')),
+          }),
         });
         state.messages = data.messages;
         state.roundCandidates = data.roundCandidates || [];
@@ -728,6 +964,46 @@ function renderRoomView() {
         if (data.discardedCandidates) {
           state.discardedCandidates = data.discardedCandidates;
         }
+        const still = state.roundCandidates.find(
+          (x) => x.status === 'pending' || x.status === 'rejected'
+        );
+        state.draftTabId = Number(btn.getAttribute('data-select'));
+        if (!state.roundCandidates.some((x) => x.id === state.draftTabId) && still) {
+          state.draftTabId = still.id;
+        }
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    });
+  });
+
+  main.querySelectorAll('[data-unselect]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        state.error = '';
+        state.loading = true;
+        snapshotComposer();
+        render();
+        const data = await api(`/api/conversations/${c.id}/unselect`, {
+          method: 'POST',
+          body: JSON.stringify({
+            candidate_id: Number(btn.getAttribute('data-unselect')),
+          }),
+        });
+        state.messages = data.messages;
+        state.roundCandidates = data.roundCandidates || [];
+        state.pendingCandidates =
+          data.pendingCandidates ||
+          state.roundCandidates.filter(
+            (x) => x.status === 'pending' || x.status === 'rejected'
+          );
+        if (data.discardedCandidates) {
+          state.discardedCandidates = data.discardedCandidates;
+        }
+        state.draftTabId = Number(btn.getAttribute('data-unselect'));
       } catch (err) {
         state.error = err.message;
       } finally {
@@ -741,6 +1017,7 @@ function renderRoomView() {
     try {
       state.error = '';
       state.loading = true;
+      snapshotComposer();
       render();
       const data = await api(`/api/conversations/${c.id}/dismiss`, {
         method: 'POST',
@@ -757,74 +1034,108 @@ function renderRoomView() {
       render();
     }
   });
+}
 
-  document.getElementById('compose-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const content = form.content.value.trim();
-    if (!content) return;
-    try {
-      state.error = '';
-      state.loading = true;
-      render();
-      const data = await api(`/api/conversations/${c.id}/turns`, {
-        method: 'POST',
-        body: JSON.stringify({ content }),
-      });
-      state.messages = [...state.messages, data.userMessage];
-      state.roundCandidates = data.roundCandidates || data.candidates || [];
-      state.pendingCandidates =
-        data.pendingCandidates ||
-        state.roundCandidates.filter(
-          (x) => x.status === 'pending' || x.status === 'rejected'
-        );
-      if (data.errors?.length) {
-        state.error = data.errors
-          .map((x) => `${x.mentor_name}: ${x.error}`)
-          .join(' · ');
+function renderRoomView() {
+  const c = state.conversation;
+  const tab = state.roomTab || 'conversation';
+  const round = state.roundCandidates || [];
+  const discarded = state.discardedCandidates || [];
+  const hasPending = round.some(
+    (x) => x.status === 'pending' || x.status === 'rejected'
+  );
+  const emptyThread = state.messages.length === 0 && round.length === 0;
+
+  const messagesHtml = state.messages
+    .map((msg) => {
+      const who = msg.role === 'user' ? 'Tú' : msg.mentor_name || 'Mentor';
+      const cls = msg.role === 'user' ? 'user' : 'mentor';
+      return `<article class="msg ${cls}">
+        <div class="who">${escapeHtml(who)}</div>
+        <div class="body md">${renderMarkdown(msg.content)}</div>
+      </article>`;
+    })
+    .join('');
+
+  const threadBody =
+    tab === 'discarded'
+      ? discardedHtml(discarded)
+      : emptyThread
+        ? state.mentors.length === 0
+          ? `<p class="hint-line">Elige modelos.</p>`
+          : ''
+        : `${messagesHtml}${
+            state.loading ? `<p class="status-line">Consultando…</p>` : ''
+          }${
+            state.error
+              ? `<p class="error">${escapeHtml(state.error)}</p>`
+              : ''
+          }${councilHtml(round, hasPending)}`;
+
+  const showComposer = tab !== 'discarded';
+
+  main.innerHTML = `
+    <div class="canvas">
+      <header class="room-head">
+        ${roomHeadMenuHtml()}
+        <input id="room-title" class="room-title" value="${escapeHtml(c.title)}" />
+        <button type="button" class="btn ghost icon-only btn-params" id="btn-params" aria-label="Parámetros">
+          ${ICON_EQ}
+        </button>
+      </header>
+      <div class="thread" id="thread">
+        <div class="thread-inner">
+          ${
+            tab === 'conversation' && emptyThread && state.error
+              ? `<p class="error">${escapeHtml(state.error)}</p>`
+              : ''
+          }
+          ${threadBody}
+        </div>
+      </div>
+      ${
+        showComposer
+          ? `<div class="composer-dock">
+              ${
+                hasPending
+                  ? `<p class="status-line warn">Elige o Continuar para seguir.</p>`
+                  : ''
+              }
+              ${composerHtml()}
+            </div>`
+          : ''
       }
-    } catch (err) {
-      state.error = err.message;
-      if (err.data?.pendingCandidates) {
-        state.pendingCandidates = err.data.pendingCandidates;
-      }
-      if (err.data?.roundCandidates) {
-        state.roundCandidates = err.data.roundCandidates;
-      }
-      if (err.data?.errors?.length) {
-        state.error =
-          err.message +
-          ' · ' +
-          err.data.errors.map((x) => `${x.mentor_name}: ${x.error}`).join(' · ');
-      }
-    } finally {
-      state.loading = false;
-      render();
-    }
-  });
+    </div>
+  `;
+
+  bindRoomHead();
+  renderParams(hasPending);
+  bindComposer();
+  bindCouncil(c);
+
+  const thread = document.getElementById('thread');
+  if (thread && tab === 'conversation') {
+    thread.scrollTop = thread.scrollHeight;
+  }
 }
 
 function render() {
+  renderSidebar();
   if (state.view === 'room' && state.conversation) {
     renderRoomView();
   } else {
-    renderListView();
+    renderEmptyLanding();
   }
+  syncShell();
 }
 
 async function boot() {
   try {
     const ok = await refreshKeyStatus();
+    await loadConversations();
     if (!ok) {
       openKeyDialog({ required: true });
-      main.innerHTML = `
-        <section class="panel">
-          <h2 class="section-title">Bienvenido a Sophistaí</h2>
-          <p class="hint">Configura tu API key de OpenRouter para empezar.</p>
-        </section>`;
-      return;
     }
-    await loadConversations();
     if (state.view === 'room' && state.conversation) {
       await loadRoom(state.conversation.id);
     } else {
@@ -832,9 +1143,9 @@ async function boot() {
     }
     render();
   } catch (err) {
-    main.innerHTML = `<section class="panel"><p class="error">${escapeHtml(
+    main.innerHTML = `<div class="empty-canvas"><p class="error">${escapeHtml(
       err.message
-    )}</p></section>`;
+    )}</p></div>`;
   }
 }
 

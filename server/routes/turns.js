@@ -15,11 +15,89 @@ import {
 } from '../db.js';
 import { conversationLog } from '../debug.js';
 import { buildSystemPrompt, buildRoomTranscript, chatCompletion } from '../openrouter.js';
+import {
+  beginConversationTurn,
+  endConversationTurn,
+  isConversationBusy,
+} from '../locks.js';
 
 const router = Router({ mergeParams: true });
 
-/** In-process lock so concurrent POST /turns can't bypass the pending guard. */
-const turnsInFlight = new Set();
+function pendingFromRound(round) {
+  return round.filter((c) => c.status === 'pending');
+}
+
+function busyPayload() {
+  return {
+    error:
+      'Ya hay un turno en curso en esta sala. Espera a que terminen los mentores.',
+  };
+}
+
+function requireIdle(conversationId, res) {
+  if (!isConversationBusy(conversationId)) return false;
+  res.status(409).json(busyPayload());
+  return true;
+}
+
+function completeMentor(conversation, history, conversationId, userMessage, mentor) {
+  const system = buildSystemPrompt({
+    mentorName: mentor.name,
+    language: conversation.language,
+  });
+  const transcript = buildRoomTranscript(history);
+  conversationLog(conversationId, 'mentor.request', {
+    mentorId: mentor.id,
+    mentorName: mentor.name,
+    modelId: mentor.model_id,
+    userMessageId: userMessage.id,
+    system,
+    transcript,
+  });
+  const started = Date.now();
+  return chatCompletion({
+    model: mentor.model_id,
+    mentorName: mentor.name,
+    language: conversation.language,
+    messages: history,
+  }).then((text) => {
+    conversationLog(conversationId, 'mentor.response', {
+      mentorId: mentor.id,
+      mentorName: mentor.name,
+      modelId: mentor.model_id,
+      ms: Date.now() - started,
+      chars: text.length,
+      content: text,
+    });
+    return { mentor, text };
+  });
+}
+
+async function fanOutMentors(mentors, conversation, history, conversationId, userMessage) {
+  let results = await Promise.allSettled(
+    mentors.map((mentor) =>
+      completeMentor(conversation, history, conversationId, userMessage, mentor)
+    )
+  );
+  results = await Promise.all(
+    results.map(async (result, index) => {
+      if (result.status === 'fulfilled') return result;
+      try {
+        const value = await completeMentor(
+          conversation,
+          history,
+          conversationId,
+          userMessage,
+          mentors[index]
+        );
+        return { status: 'fulfilled', value };
+      } catch (reason) {
+        return { status: 'rejected', reason };
+      }
+    })
+  );
+  return results;
+}
 
 router.post('/turns', async (req, res) => {
   const conversationId = Number(req.params.id);
@@ -40,48 +118,40 @@ router.post('/turns', async (req, res) => {
       return res.status(400).json({ error: 'El mensaje no puede estar vacío' });
     }
 
-    if (turnsInFlight.has(conversationId)) {
+    if (!beginConversationTurn(conversationId)) {
       conversationLog(conversationId, 'turn.rejected', {
         reason: 'turn_in_flight',
       });
-      return res.status(409).json({
-        error:
-          'Ya hay un turno en curso en esta sala. Espera a que terminen los mentores.',
-      });
+      return res.status(409).json(busyPayload());
     }
 
-    const openChoices = countOpenRoundChoices(conversationId);
-    const existingRound = getRoundCandidates(conversationId);
-    if (openChoices > 0) {
-      conversationLog(conversationId, 'turn.rejected', {
-        reason: 'open_round',
-        openChoices,
-      });
-      return res.status(409).json({
-        error:
-          'Hay opiniones por revisar. Elige las que quieras o pulsa Continuar sin elegir más.',
-        roundCandidates: existingRound,
-        pendingCandidates: existingRound.filter(
-          (c) => c.status === 'pending' || c.status === 'rejected'
-        ),
-      });
-    }
-
-    const mentors = getMentors(conversationId);
-    if (mentors.length === 0) {
-      conversationLog(conversationId, 'turn.rejected', {
-        reason: 'no_mentors',
-      });
-      return res
-        .status(400)
-        .json({ error: 'Agrega al menos un mentor a la sala' });
-    }
-
-    turnsInFlight.add(conversationId);
-
-    let userMessage;
     try {
-      userMessage = insertUserMessage(conversationId, content);
+      const openChoices = countOpenRoundChoices(conversationId);
+      const existingRound = getRoundCandidates(conversationId);
+      if (openChoices > 0) {
+        conversationLog(conversationId, 'turn.rejected', {
+          reason: 'open_round',
+          openChoices,
+        });
+        return res.status(409).json({
+          error:
+            'Hay opiniones por revisar. Elige las que quieras o pulsa Continuar sin elegir más.',
+          roundCandidates: existingRound,
+          pendingCandidates: pendingFromRound(existingRound),
+        });
+      }
+
+      const mentors = getMentors(conversationId);
+      if (mentors.length === 0) {
+        conversationLog(conversationId, 'turn.rejected', {
+          reason: 'no_mentors',
+        });
+        return res
+          .status(400)
+          .json({ error: 'Agrega al menos un mentor a la sala' });
+      }
+
+      const userMessage = insertUserMessage(conversationId, content);
       const history = getMessages(conversationId);
 
       conversationLog(conversationId, 'turn.started', {
@@ -97,39 +167,27 @@ router.post('/turns', async (req, res) => {
         language: conversation.language,
       });
 
-      const results = await Promise.allSettled(
-        mentors.map((mentor) => {
-          const system = buildSystemPrompt({
-            mentorName: mentor.name,
-            language: conversation.language,
-          });
-          const transcript = buildRoomTranscript(history);
-          conversationLog(conversationId, 'mentor.request', {
-            mentorId: mentor.id,
-            mentorName: mentor.name,
-            modelId: mentor.model_id,
-            userMessageId: userMessage.id,
-            system,
-            transcript,
-          });
-          const started = Date.now();
-          return chatCompletion({
-            model: mentor.model_id,
-            mentorName: mentor.name,
-            language: conversation.language,
-            messages: history,
-          }).then((text) => {
-            conversationLog(conversationId, 'mentor.response', {
-              mentorId: mentor.id,
-              mentorName: mentor.name,
-              modelId: mentor.model_id,
-              ms: Date.now() - started,
-              chars: text.length,
-              content: text,
-            });
-            return { mentor, text };
-          });
-        })
+      const results = await fanOutMentors(
+        mentors,
+        conversation,
+        history,
+        conversationId,
+        userMessage
+      );
+
+      const still = getConversation(conversationId);
+      if (!still) {
+        conversationLog(conversationId, 'turn.aborted', {
+          reason: 'conversation_deleted',
+          userMessageId: userMessage.id,
+        });
+        return res.status(410).json({
+          error: 'La sala se eliminó mientras los mentores respondían.',
+        });
+      }
+
+      const currentMentorIds = new Set(
+        getMentors(conversationId).map((m) => m.id)
       );
 
       const candidates = [];
@@ -137,7 +195,32 @@ router.post('/turns', async (req, res) => {
 
       results.forEach((result, index) => {
         const mentor = mentors[index];
-        if (result.status === 'fulfilled') {
+        if (result.status !== 'fulfilled') {
+          const error = result.reason?.message || String(result.reason);
+          errors.push({
+            mentor_id: mentor.id,
+            mentor_name: mentor.name,
+            model_id: mentor.model_id,
+            error,
+          });
+          conversationLog(conversationId, 'mentor.error', {
+            mentorId: mentor.id,
+            mentorName: mentor.name,
+            modelId: mentor.model_id,
+            error,
+          });
+          return;
+        }
+        if (!currentMentorIds.has(mentor.id)) {
+          errors.push({
+            mentor_id: mentor.id,
+            mentor_name: mentor.name,
+            model_id: mentor.model_id,
+            error: 'El mentor cambió durante el turno',
+          });
+          return;
+        }
+        try {
           const candidate = insertCandidate({
             conversationId,
             userMessageId: userMessage.id,
@@ -151,19 +234,16 @@ router.post('/turns', async (req, res) => {
             mentorName: mentor.name,
             modelId: mentor.model_id,
           });
-        } else {
-          const error = result.reason?.message || String(result.reason);
+        } catch (err) {
           errors.push({
             mentor_id: mentor.id,
             mentor_name: mentor.name,
             model_id: mentor.model_id,
-            error,
+            error: err.message,
           });
-          conversationLog(conversationId, 'mentor.error', {
+          conversationLog(conversationId, 'candidate.insert_failed', {
             mentorId: mentor.id,
-            mentorName: mentor.name,
-            modelId: mentor.model_id,
-            error,
+            error: err.message,
           });
         }
       });
@@ -195,21 +275,23 @@ router.post('/turns', async (req, res) => {
         errors,
       });
     } finally {
-      turnsInFlight.delete(conversationId);
+      endConversationTurn(conversationId);
     }
   } catch (err) {
-    turnsInFlight.delete(conversationId);
     conversationLog(conversationId, 'turn.error', {
       error: err.message,
       status: err.status || 500,
     });
-    res.status(err.status || 500).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
   }
 });
 
 router.post('/select', (req, res) => {
   const conversationId = Number(req.params.id);
   try {
+    if (requireIdle(conversationId, res)) return;
     const conversation = getConversation(conversationId);
     if (!conversation) {
       conversationLog(conversationId, 'select.rejected', {
@@ -243,9 +325,7 @@ router.post('/select', (req, res) => {
       mentorName: result.candidate.mentor_name,
       messageId: result.message.id,
       content: result.message.content,
-      remainingPending: result.roundCandidates.filter(
-        (c) => c.status === 'pending' || c.status === 'rejected'
-      ).length,
+      remainingPending: pendingFromRound(result.roundCandidates).length,
     });
 
     res.json({
@@ -253,9 +333,7 @@ router.post('/select', (req, res) => {
       candidate: result.candidate,
       messages: getMessages(conversationId),
       roundCandidates: result.roundCandidates,
-      pendingCandidates: result.roundCandidates.filter(
-        (c) => c.status === 'pending' || c.status === 'rejected'
-      ),
+      pendingCandidates: pendingFromRound(result.roundCandidates),
       discardedCandidates: getDiscardedCandidates(conversationId),
     });
   } catch (err) {
@@ -267,6 +345,7 @@ router.post('/select', (req, res) => {
 router.post('/unselect', (req, res) => {
   const conversationId = Number(req.params.id);
   try {
+    if (requireIdle(conversationId, res)) return;
     const conversation = getConversation(conversationId);
     if (!conversation) {
       conversationLog(conversationId, 'unselect.rejected', {
@@ -304,9 +383,7 @@ router.post('/unselect', (req, res) => {
       candidate: result.candidate,
       messages: result.messages,
       roundCandidates: result.roundCandidates,
-      pendingCandidates: result.roundCandidates.filter(
-        (c) => c.status === 'pending' || c.status === 'rejected'
-      ),
+      pendingCandidates: pendingFromRound(result.roundCandidates),
       discardedCandidates: getDiscardedCandidates(conversationId),
     });
   } catch (err) {
@@ -318,6 +395,7 @@ router.post('/unselect', (req, res) => {
 router.post('/dismiss', (req, res) => {
   const conversationId = Number(req.params.id);
   try {
+    if (requireIdle(conversationId, res)) return;
     const conversation = getConversation(conversationId);
     if (!conversation) {
       conversationLog(conversationId, 'dismiss.rejected', {
@@ -334,6 +412,7 @@ router.post('/dismiss', (req, res) => {
 
     res.json({
       rejected: result.rejected,
+      dismissed: result.dismissed,
       roundCandidates: [],
       pendingCandidates: [],
       discardedCandidates: getDiscardedCandidates(conversationId),

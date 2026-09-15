@@ -14,11 +14,11 @@ npm install
 npm start
 ```
 
-Abre [http://127.0.0.1:3847](http://127.0.0.1:3847).
+Abre [http://127.0.0.1:3847](http://127.0.0.1:3847). La sala abierta queda en la URL (`#/c/3`) para que un refresh no te saque del hilo.
 
 La primera vez la UI te pide la API key y la escribe en un archivo `.env` del proyecto (`OPENROUTER_API_KEY=...`) con permisos `0600`. También puedes crear `.env` a mano a partir de `.env.example`.
 
-La key **no** se guarda en SQLite. El servidor escucha por defecto solo en `127.0.0.1` (`HOST` en `.env` para cambiarlo).
+La key **no** se guarda en SQLite. El servidor escucha por defecto solo en `127.0.0.1` (`HOST` en `.env` para cambiarlo). Si `HOST` no es loopback, hay que definir `SOPHISTAI_ALLOW_REMOTE=1`.
 
 ## Uso
 
@@ -42,7 +42,7 @@ Los system prompts de los mentores están siempre en **inglés**; dentro se indi
 
 ## Debug
 
-Pon `SOPHISTAI_DEBUG=1` (o `DEBUG=1`) en `.env` y reinicia. Con eso se registra cada interacción:
+Pon `SOPHISTAI_DEBUG=1` en `.env` y reinicia. Con eso se registra cada interacción:
 
 - Consola: líneas `[sophistai:debug] …`
 - `data/logs/app.jsonl` — todo el servidor
@@ -56,8 +56,9 @@ Con debug activo, los JSONL pueden contener el texto completo de la conversació
 
 | Comando     | Descripción              |
 | ----------- | ------------------------ |
-| `npm start` | Servidor Express |
+| `npm start` | Servidor Express (sin live reload) |
 | `npm run dev` | Servidor con `--watch` en `server/` y live reload de HTML/CSS/JS en `public/` |
+| `npm test` | Tests de la máquina de estado SQLite y de `.env` |
 
 ## Licencia
 

@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const rootDir = path.join(__dirname, '..');
-export const envPath = path.join(rootDir, '.env');
+export const envPath = process.env.SOPHISTAI_ENV_PATH || path.join(rootDir, '.env');
 
 export function loadEnv() {
   dotenv.config({ path: envPath, override: true, quiet: true });
@@ -52,7 +52,7 @@ export function writeApiKey(apiKey) {
 
   const line = `OPENROUTER_API_KEY=${key}`;
   if (/^OPENROUTER_API_KEY=/m.test(content)) {
-    content = content.replace(/^OPENROUTER_API_KEY=.*$/m, line);
+    content = content.replace(/^OPENROUTER_API_KEY=.*$/m, () => line);
   } else if (content.trim()) {
     content = `${content.replace(/\s*$/, '')}\n${line}\n`;
   } else {

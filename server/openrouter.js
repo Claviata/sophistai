@@ -3,6 +3,17 @@ import { getApiKey, hasApiKey } from './env.js';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 const DEFAULT_TIMEOUT_MS = 90_000;
 
+function openRouterReferer() {
+  const port = Number(process.env.PORT) || 3847;
+  const host = process.env.HOST || '127.0.0.1';
+  const refererHost =
+    host === '0.0.0.0' || host === '::' || host === '[::]'
+      ? '127.0.0.1'
+      : String(host).replace(/^\[|\]$/g, '');
+  const wrapped = refererHost.includes(':') ? `[${refererHost}]` : refererHost;
+  return `http://${wrapped}:${port}`;
+}
+
 function authHeaders() {
   const key = getApiKey();
   if (!key) {
@@ -13,7 +24,7 @@ function authHeaders() {
   return {
     Authorization: `Bearer ${key}`,
     'Content-Type': 'application/json',
-    'HTTP-Referer': 'http://localhost:3847',
+    'HTTP-Referer': openRouterReferer(),
     'X-Title': 'Sophistaí',
   };
 }

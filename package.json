@@ -15,7 +15,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch-path=server --watch-preserve-output server/index.js"
+    "dev": "node --watch-path=server --watch-preserve-output server/dev.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "engines": {
     "node": ">=20"

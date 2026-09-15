@@ -28,11 +28,16 @@ const CLIENT_JS = `(function () {
 })();
 `;
 
+function truthy(value) {
+  if (value == null) return false;
+  const v = String(value).trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 export function isLiveReloadEnabled() {
   return (
-    process.env.NODE_ENV !== 'production' &&
-    process.env.SOPHISTAI_LIVE_RELOAD !== '0' &&
-    process.env.SOFISTAI_LIVE_RELOAD !== '0'
+    truthy(process.env.SOPHISTAI_LIVE_RELOAD) ||
+    truthy(process.env.SOFISTAI_LIVE_RELOAD)
   );
 }
 

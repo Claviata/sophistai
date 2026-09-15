@@ -12,9 +12,7 @@ function truthy(value) {
 
 export function isDebugEnabled() {
   return (
-    truthy(process.env.SOPHISTAI_DEBUG) ||
-    truthy(process.env.SOFISTAI_DEBUG) ||
-    truthy(process.env.DEBUG)
+    truthy(process.env.SOPHISTAI_DEBUG) || truthy(process.env.SOFISTAI_DEBUG)
   );
 }
 
@@ -56,8 +54,23 @@ function redact(value) {
   return value;
 }
 
+const MAX_LOG_BYTES = 10 * 1024 * 1024;
+
+function rotateIfHuge(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    if (st.size < MAX_LOG_BYTES) return;
+    fs.renameSync(filePath, `${filePath}.1`);
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') {
+      // keep logging even if rotation fails
+    }
+  }
+}
+
 function writeLine(filePath, entry) {
   ensureLogsDir();
+  rotateIfHuge(filePath);
   fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, 'utf8');
 }
 

@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv, hasApiKey, rootDir } from './env.js';
 import { debugLog, isDebugEnabled, getLogsDir } from './debug.js';
 import { attachLiveReload } from './live-reload.js';
+import {
+  apiErrorHandler,
+  assertBindAllowed,
+  originGuard,
+} from './security.js';
 import './db.js';
 import settingsRouter from './routes/settings.js';
 import conversationsRouter, {
@@ -20,7 +25,12 @@ const PORT = Number(process.env.PORT) || 3847;
 
 app.use(express.json({ limit: '1mb' }));
 
+const HOST = process.env.HOST || '127.0.0.1';
+assertBindAllowed(HOST);
+
 const liveReload = attachLiveReload(app, publicDir);
+
+app.use(originGuard(HOST, PORT));
 
 app.use((req, res, next) => {
   if (!isDebugEnabled() || !req.path.startsWith('/api/')) {
@@ -46,14 +56,13 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(publicDir, liveReload.staticOptions));
-app.use(
-  '/vendor/marked',
-  express.static(path.join(rootDir, 'node_modules/marked/lib'))
-);
-app.use(
-  '/vendor/dompurify',
-  express.static(path.join(rootDir, 'node_modules/dompurify/dist'))
-);
+app.get('/vendor/marked/marked.esm.js', (_req, res) => {
+  res.sendFile(path.join(rootDir, 'node_modules/marked/lib/marked.esm.js'));
+});
+app.get('/vendor/dompurify/purify.es.mjs', (_req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(rootDir, 'node_modules/dompurify/dist/purify.es.mjs'));
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -75,7 +84,7 @@ app.use('/api', (_req, res) => {
 
 app.get('/{*splat}', liveReload.sendIndex);
 
-const HOST = process.env.HOST || '127.0.0.1';
+app.use(apiErrorHandler);
 
 app.listen(PORT, HOST, () => {
   console.log(`Sophistaí en http://${HOST}:${PORT}`);

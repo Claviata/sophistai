@@ -2,11 +2,13 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAX_MENTORS } from './constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 const dataDir = path.join(rootDir, 'data');
-const dbPath = path.join(dataDir, 'sophistai.sqlite');
+const dbPath =
+  process.env.SOPHISTAI_DB_PATH || path.join(dataDir, 'sophistai.sqlite');
 const legacyDbPath = path.join(dataDir, 'sofistai.sqlite');
 
 if (!fs.existsSync(dataDir)) {
@@ -25,13 +27,17 @@ function adoptLegacyDbFile(fromPath, toPath) {
   }
 }
 
-adoptLegacyDbFile(legacyDbPath, dbPath);
+if (!process.env.SOPHISTAI_DB_PATH) {
+  adoptLegacyDbFile(legacyDbPath, dbPath);
+}
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
 
 function ensureColumn(table, column, definition) {
+  // table/column identifiers are hardcoded at call sites, never request input
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -69,10 +75,13 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     user_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    mentor_id INTEGER NOT NULL REFERENCES mentors(id) ON DELETE CASCADE,
+    mentor_id INTEGER REFERENCES mentors(id) ON DELETE SET NULL,
+    mentor_name TEXT NOT NULL DEFAULT 'Mentor',
+    model_id TEXT,
+    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-      CHECK (status IN ('pending', 'selected', 'rejected', 'dismissed')),
+      CHECK (status IN ('pending', 'selected', 'dismissed')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -84,37 +93,120 @@ db.exec(`
 
 ensureColumn('messages', 'speaker_name', 'TEXT');
 
-function migrateCandidatesStatusConstraint() {
+const CANDIDATE_COLUMNS = `
+  c.id, c.conversation_id, c.user_message_id, c.mentor_id, c.message_id,
+  c.content, c.status, c.created_at,
+  COALESCE(c.mentor_name, mentors.name, 'Mentor') AS mentor_name,
+  COALESCE(c.model_id, mentors.model_id) AS model_id
+`;
+
+const CANDIDATE_FROM = `
+  FROM candidates c
+  LEFT JOIN mentors ON mentors.id = c.mentor_id
+`;
+
+const CANDIDATE_SELECT = `SELECT ${CANDIDATE_COLUMNS} ${CANDIDATE_FROM}`;
+
+function candidatesNeedRebuild() {
   const row = db
     .prepare(
       `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'candidates'`
     )
     .get();
-  if (!row?.sql || row.sql.includes("'dismissed'")) return;
-
-  db.exec(`
-    CREATE TABLE candidates_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      user_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-      mentor_id INTEGER NOT NULL REFERENCES mentors(id) ON DELETE CASCADE,
-      content TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'selected', 'rejected', 'dismissed')),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    INSERT INTO candidates_new
-      (id, conversation_id, user_message_id, mentor_id, content, status, created_at)
-    SELECT id, conversation_id, user_message_id, mentor_id, content, status, created_at
-    FROM candidates;
-    DROP TABLE candidates;
-    ALTER TABLE candidates_new RENAME TO candidates;
-    CREATE INDEX IF NOT EXISTS idx_candidates_conversation ON candidates(conversation_id);
-    CREATE INDEX IF NOT EXISTS idx_candidates_user_message ON candidates(user_message_id);
-  `);
+  if (!row?.sql) return false;
+  const info = db.prepare(`PRAGMA table_info(candidates)`).all();
+  const names = new Set(info.map((c) => c.name));
+  if (!names.has('mentor_name') || !names.has('model_id') || !names.has('message_id')) {
+    return true;
+  }
+  if (row.sql.includes("'rejected'")) return true;
+  const mentorCol = info.find((c) => c.name === 'mentor_id');
+  if (mentorCol && mentorCol.notnull === 1) return true;
+  return false;
 }
 
-migrateCandidatesStatusConstraint();
+function migrateCandidatesSchema() {
+  if (!candidatesNeedRebuild()) return;
+
+  db.pragma('foreign_keys = OFF');
+  try {
+    const migrate = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE candidates_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          user_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+          mentor_id INTEGER REFERENCES mentors(id) ON DELETE SET NULL,
+          mentor_name TEXT NOT NULL DEFAULT 'Mentor',
+          model_id TEXT,
+          message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+          content TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'selected', 'dismissed')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO candidates_new
+          (id, conversation_id, user_message_id, mentor_id, mentor_name, model_id,
+           message_id, content, status, created_at)
+        SELECT
+          c.id,
+          c.conversation_id,
+          c.user_message_id,
+          c.mentor_id,
+          COALESCE(m.name, 'Mentor'),
+          m.model_id,
+          NULL,
+          c.content,
+          CASE c.status WHEN 'rejected' THEN 'dismissed' ELSE c.status END,
+          c.created_at
+        FROM candidates c
+        LEFT JOIN mentors m ON m.id = c.mentor_id;
+        DROP TABLE candidates;
+        ALTER TABLE candidates_new RENAME TO candidates;
+        CREATE INDEX IF NOT EXISTS idx_candidates_conversation ON candidates(conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_candidates_user_message ON candidates(user_message_id);
+      `);
+
+      const selected = db
+        .prepare(
+          `SELECT id, conversation_id, mentor_id, content
+           FROM candidates WHERE status = 'selected'`
+        )
+        .all();
+      const findMsg = db.prepare(
+        `SELECT id FROM messages
+         WHERE conversation_id = ?
+           AND role = 'mentor'
+           AND mentor_id IS ?
+           AND content = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      );
+      const setMsg = db.prepare(
+        `UPDATE candidates SET message_id = ? WHERE id = ?`
+      );
+      for (const c of selected) {
+        const msg = findMsg.get(c.conversation_id, c.mentor_id, c.content);
+        if (msg) setMsg.run(msg.id, c.id);
+      }
+    });
+    migrate();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
+
+migrateCandidatesSchema();
+
+export function sweepOrphanUserMessages() {
+  db.prepare(
+    `DELETE FROM messages
+     WHERE role = 'user'
+       AND id NOT IN (SELECT user_message_id FROM candidates)`
+  ).run();
+}
+
+sweepOrphanUserMessages();
 
 export function touchConversation(id) {
   db.prepare(
@@ -138,11 +230,10 @@ export function listConversations() {
 
 export function createConversation({ title = 'Nueva sala', language = 'es' } = {}) {
   const lang = language === 'en' ? 'en' : 'es';
+  const nextTitle = String(title ?? '').trim() || 'Nueva sala';
   const result = db
-    .prepare(
-      `INSERT INTO conversations (title, language) VALUES (?, ?)`
-    )
-    .run(title.trim() || 'Nueva sala', lang);
+    .prepare(`INSERT INTO conversations (title, language) VALUES (?, ?)`)
+    .run(nextTitle, lang);
   return getConversation(result.lastInsertRowid);
 }
 
@@ -180,27 +271,60 @@ export function getMentors(conversationId) {
     .all(conversationId);
 }
 
+export function normalizeMentorInput(mentors) {
+  const seen = new Set();
+  const out = [];
+  for (const m of mentors || []) {
+    const model_id = String(m?.model_id || '').trim();
+    if (!model_id || seen.has(model_id)) continue;
+    seen.add(model_id);
+    out.push({
+      model_id,
+      name: m.name,
+      sort_order: m.sort_order,
+    });
+  }
+  return out;
+}
+
 export function replaceMentors(conversationId, mentors) {
-  const replace = db.transaction((items) => {
-    db.prepare(`DELETE FROM mentors WHERE conversation_id = ?`).run(
-      conversationId
-    );
+  const items = normalizeMentorInput(mentors);
+  if (items.length > MAX_MENTORS) {
+    throw Object.assign(new Error(`Máximo ${MAX_MENTORS} mentores por sala`), {
+      status: 400,
+    });
+  }
+  const replace = db.transaction((nextItems) => {
+    const existing = getMentors(conversationId);
+    const keep = new Set(nextItems.map((m) => m.model_id));
+    const del = db.prepare(`DELETE FROM mentors WHERE id = ?`);
+    for (const m of existing) {
+      if (!keep.has(m.model_id)) del.run(m.id);
+    }
+
     const insert = db.prepare(
       `INSERT INTO mentors (conversation_id, name, model_id, sort_order)
        VALUES (?, ?, ?, ?)`
     );
-    items.forEach((m, index) => {
-      insert.run(
-        conversationId,
-        String(m.name || `Mentor ${index + 1}`).trim(),
-        String(m.model_id).trim(),
-        Number.isFinite(m.sort_order) ? m.sort_order : index
-      );
+    const update = db.prepare(
+      `UPDATE mentors SET name = ?, sort_order = ? WHERE id = ?`
+    );
+    const remaining = new Map(
+      getMentors(conversationId).map((m) => [m.model_id, m])
+    );
+
+    nextItems.forEach((m, index) => {
+      const name = String(m.name || `Mentor ${index + 1}`).trim() || `Mentor ${index + 1}`;
+      const sort = Number.isFinite(m.sort_order) ? m.sort_order : index;
+      const found = remaining.get(m.model_id);
+      if (found) update.run(name, sort, found.id);
+      else insert.run(conversationId, name, m.model_id, sort);
     });
+
     touchConversation(conversationId);
     return getMentors(conversationId);
   });
-  return replace(mentors);
+  return replace(items);
 }
 
 export function updateMentorName(mentorId, conversationId, name) {
@@ -278,34 +402,34 @@ export function insertCandidate({
   mentorId,
   content,
 }) {
+  const mentor = db
+    .prepare(`SELECT name, model_id FROM mentors WHERE id = ?`)
+    .get(mentorId);
+  if (!mentor) {
+    throw Object.assign(new Error('Mentor no encontrado'), { status: 409 });
+  }
   const result = db
     .prepare(
       `INSERT INTO candidates
-         (conversation_id, user_message_id, mentor_id, content, status)
-       VALUES (?, ?, ?, ?, 'pending')`
+         (conversation_id, user_message_id, mentor_id, mentor_name, model_id, content, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
     )
-    .run(conversationId, userMessageId, mentorId, content);
-  return db
-    .prepare(
-      `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-              c.content, c.status, c.created_at,
-              mentors.name AS mentor_name, mentors.model_id
-       FROM candidates c
-       JOIN mentors ON mentors.id = c.mentor_id
-       WHERE c.id = ?`
-    )
-    .get(result.lastInsertRowid);
+    .run(
+      conversationId,
+      userMessageId,
+      mentorId,
+      mentor.name || 'Mentor',
+      mentor.model_id,
+      content
+    );
+  return getCandidate(result.lastInsertRowid);
 }
 
 export function getPendingCandidates(conversationId, userMessageId = null) {
   if (userMessageId) {
     return db
       .prepare(
-        `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-                c.content, c.status, c.created_at,
-                mentors.name AS mentor_name, mentors.model_id
-         FROM candidates c
-         JOIN mentors ON mentors.id = c.mentor_id
+        `${CANDIDATE_SELECT}
          WHERE c.conversation_id = ?
            AND c.user_message_id = ?
            AND c.status = 'pending'
@@ -315,11 +439,7 @@ export function getPendingCandidates(conversationId, userMessageId = null) {
   }
   return db
     .prepare(
-      `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-              c.content, c.status, c.created_at,
-              mentors.name AS mentor_name, mentors.model_id
-       FROM candidates c
-       JOIN mentors ON mentors.id = c.mentor_id
+      `${CANDIDATE_SELECT}
        WHERE c.conversation_id = ? AND c.status = 'pending'
        ORDER BY c.id ASC`
     )
@@ -327,52 +447,39 @@ export function getPendingCandidates(conversationId, userMessageId = null) {
 }
 
 /**
- * Open council round for the latest user message that still has
- * pending or rejected (not yet dismissed) opinions to review/rescue.
+ * Council round for the latest user message only.
+ * Closed once any opinion is dismissed. Fully selected rounds stay
+ * open so the user can unselect before sending the next turn.
  */
 export function getRoundCandidates(conversationId) {
-  let row = db
+  const latestUser = db
     .prepare(
-      `SELECT user_message_id
-       FROM candidates
-       WHERE conversation_id = ?
-         AND status IN ('pending', 'rejected')
-       ORDER BY user_message_id DESC, id DESC
+      `SELECT id FROM messages
+       WHERE conversation_id = ? AND role = 'user'
+       ORDER BY id DESC
        LIMIT 1`
     )
     .get(conversationId);
+  if (!latestUser) return [];
 
-  if (!row) {
-    row = db
-      .prepare(
-        `SELECT user_message_id
-         FROM candidates
-         WHERE conversation_id = ?
-           AND status = 'selected'
-           AND user_message_id NOT IN (
-             SELECT user_message_id FROM candidates
-             WHERE conversation_id = ? AND status = 'dismissed'
-           )
-         ORDER BY user_message_id DESC, id DESC
-         LIMIT 1`
-      )
-      .get(conversationId, conversationId);
-  }
-  if (!row) return [];
+  const statuses = db
+    .prepare(
+      `SELECT status FROM candidates
+       WHERE conversation_id = ? AND user_message_id = ?`
+    )
+    .all(conversationId, latestUser.id);
+  if (statuses.length === 0) return [];
+  if (statuses.some((s) => s.status === 'dismissed')) return [];
 
   return db
     .prepare(
-      `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-              c.content, c.status, c.created_at,
-              mentors.name AS mentor_name, mentors.model_id
-       FROM candidates c
-       JOIN mentors ON mentors.id = c.mentor_id
+      `${CANDIDATE_SELECT}
        WHERE c.conversation_id = ?
          AND c.user_message_id = ?
-         AND c.status IN ('pending', 'selected', 'rejected')
+         AND c.status IN ('pending', 'selected')
        ORDER BY c.id ASC`
     )
-    .all(conversationId, row.user_message_id);
+    .all(conversationId, latestUser.id);
 }
 
 export function getOpenRoundCandidates(conversationId) {
@@ -380,22 +487,12 @@ export function getOpenRoundCandidates(conversationId) {
 }
 
 export function countOpenRoundChoices(conversationId) {
-  return getRoundCandidates(conversationId).filter(
-    (c) => c.status === 'pending' || c.status === 'rejected'
-  ).length;
+  return getRoundCandidates(conversationId).filter((c) => c.status === 'pending')
+    .length;
 }
 
 export function getCandidate(id) {
-  return db
-    .prepare(
-      `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-              c.content, c.status, c.created_at,
-              mentors.name AS mentor_name, mentors.model_id
-       FROM candidates c
-       JOIN mentors ON mentors.id = c.mentor_id
-       WHERE c.id = ?`
-    )
-    .get(id);
+  return db.prepare(`${CANDIDATE_SELECT} WHERE c.id = ?`).get(id);
 }
 
 export function selectCandidate(candidateId, conversationId) {
@@ -407,17 +504,19 @@ export function selectCandidate(candidateId, conversationId) {
         status: 400,
       });
     }
-    if (candidate.status !== 'pending' && candidate.status !== 'rejected') {
+    if (candidate.status !== 'pending') {
       throw new Error('Esta opinión ya no se puede elegir');
     }
-
-    db.prepare(`UPDATE candidates SET status = 'selected' WHERE id = ?`).run(id);
 
     const message = insertMentorMessage(
       candidate.conversation_id,
       candidate.mentor_id,
       candidate.content
     );
+
+    db.prepare(
+      `UPDATE candidates SET status = 'selected', message_id = ? WHERE id = ?`
+    ).run(message.id, id);
 
     return {
       candidate: getCandidate(id),
@@ -452,22 +551,13 @@ export function unselectCandidate(candidateId, conversationId) {
       throw new Error('La ronda ya se cerró');
     }
 
-    const inserted = db
-      .prepare(
-        `SELECT id FROM messages
-         WHERE conversation_id = ?
-           AND role = 'mentor'
-           AND mentor_id = ?
-           AND content = ?
-         ORDER BY id DESC
-         LIMIT 1`
-      )
-      .get(convId, candidate.mentor_id, candidate.content);
-    if (inserted) {
-      deleteMessage(inserted.id, convId);
+    if (candidate.message_id) {
+      deleteMessage(candidate.message_id, convId);
     }
 
-    db.prepare(`UPDATE candidates SET status = 'pending' WHERE id = ?`).run(id);
+    db.prepare(
+      `UPDATE candidates SET status = 'pending', message_id = NULL WHERE id = ?`
+    ).run(id);
     touchConversation(convId);
 
     return {
@@ -482,24 +572,20 @@ export function unselectCandidate(candidateId, conversationId) {
 
 export function dismissPendingCandidates(conversationId) {
   const dismiss = db.transaction((convId) => {
-    const open = db
-      .prepare(
-        `SELECT id, user_message_id FROM candidates
-         WHERE conversation_id = ? AND status IN ('pending', 'rejected')
-         ORDER BY id ASC`
-      )
-      .all(convId);
+    const round = getRoundCandidates(convId);
+    const open = round.filter((c) => c.status === 'pending');
     if (open.length === 0) {
-      return { rejected: 0, roundCandidates: [] };
+      return { dismissed: 0, roundCandidates: [] };
     }
     const result = db
       .prepare(
         `UPDATE candidates SET status = 'dismissed'
-         WHERE conversation_id = ? AND status IN ('pending', 'rejected')`
+         WHERE conversation_id = ? AND user_message_id = ? AND status = 'pending'`
       )
-      .run(convId);
+      .run(convId, open[0].user_message_id);
     touchConversation(convId);
     return {
+      dismissed: result.changes,
       rejected: result.changes,
       roundCandidates: [],
       dismissedFromUserMessageId: open[0].user_message_id,
@@ -509,8 +595,7 @@ export function dismissPendingCandidates(conversationId) {
 }
 
 /**
- * Opinions set aside (dismissed) or leftover rejected outside the open
- * review round — read-only archive for the Discarded tab.
+ * Opinions set aside (dismissed) — read-only archive for the Discarded tab.
  */
 export function getDiscardedCandidates(conversationId) {
   const open = getRoundCandidates(conversationId);
@@ -518,15 +603,12 @@ export function getDiscardedCandidates(conversationId) {
 
   return db
     .prepare(
-      `SELECT c.id, c.conversation_id, c.user_message_id, c.mentor_id,
-              c.content, c.status, c.created_at,
-              mentors.name AS mentor_name, mentors.model_id,
+      `SELECT ${CANDIDATE_COLUMNS},
               um.content AS user_prompt
-       FROM candidates c
-       JOIN mentors ON mentors.id = c.mentor_id
+       ${CANDIDATE_FROM}
        LEFT JOIN messages um ON um.id = c.user_message_id
        WHERE c.conversation_id = ?
-         AND c.status IN ('dismissed', 'rejected')
+         AND c.status = 'dismissed'
        ORDER BY c.user_message_id DESC, c.id ASC`
     )
     .all(conversationId)

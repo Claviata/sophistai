@@ -27,6 +27,8 @@ const deleteForm = document.getElementById('delete-form');
 const deleteCopy = document.getElementById('delete-copy');
 
 const LANG_KEY = 'sophistai.language';
+const MAX_MENTORS = 8;
+const ROOM_HASH_RE = /^#\/c\/(\d+)$/;
 
 const ICON_MENU = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>`;
 const ICON_MORE = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5h.01M8 8h.01M8 12.5h.01" stroke-width="3"/></svg>`;
@@ -107,14 +109,52 @@ function renderMarkdown(text) {
   return wrapMarkdownTables(clean);
 }
 
+function isPending(candidate) {
+  return candidate?.status === 'pending';
+}
+
+function hasPendingChoices(round = state.roundCandidates) {
+  return (round || []).some(isPending);
+}
+
+function dateLocale() {
+  return state.conversation?.language === 'en' ? 'en' : 'es';
+}
+
 function formatDate(iso) {
   try {
-    return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleString('es', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    });
+    return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleString(
+      dateLocale(),
+      {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }
+    );
   } catch {
     return iso;
+  }
+}
+
+function syncDocumentLang() {
+  document.documentElement.lang =
+    state.conversation?.language === 'en' ? 'en' : 'es';
+}
+
+function parseRoomHash() {
+  const match = String(location.hash || '').match(ROOM_HASH_RE);
+  return match ? Number(match[1]) : null;
+}
+
+function setRoomHash(id) {
+  const next = `#/c/${id}`;
+  if (location.hash !== next) {
+    history.replaceState(null, '', next);
+  }
+}
+
+function clearRoomHash() {
+  if (location.hash) {
+    history.replaceState(null, '', `${location.pathname}${location.search}`);
   }
 }
 
@@ -241,18 +281,14 @@ async function loadRoom(id, { keepDraft = false } = {}) {
   state.messages = data.messages || [];
   state.roundCandidates = data.roundCandidates || data.pendingCandidates || [];
   state.pendingCandidates =
-    data.pendingCandidates ||
-    state.roundCandidates.filter(
-      (c) => c.status === 'pending' || c.status === 'rejected'
-    );
+    data.pendingCandidates || state.roundCandidates.filter(isPending);
   state.discardedCandidates = data.discardedCandidates || [];
   state.view = 'room';
   state.roomTab = 'conversation';
   if (!keepDraft) state.composerDraft = '';
-  const firstOpen = state.roundCandidates.find(
-    (c) => c.status === 'pending' || c.status === 'rejected'
-  );
+  const firstOpen = state.roundCandidates.find(isPending);
   state.draftTabId = (firstOpen || state.roundCandidates[0] || {}).id ?? null;
+  setRoomHash(id);
 }
 
 async function createRoom() {
@@ -343,6 +379,10 @@ modelsConfirm.addEventListener('click', async () => {
     modelsStatus.textContent = 'Selecciona al menos un modelo.';
     return;
   }
+  if (selected.length > MAX_MENTORS) {
+    modelsStatus.textContent = `Máximo ${MAX_MENTORS} mentores por sala.`;
+    return;
+  }
 
   const existingByModel = new Map(
     state.mentors.map((m) => [m.model_id, m.name])
@@ -364,10 +404,11 @@ modelsConfirm.addEventListener('click', async () => {
       }
     );
     state.mentors = data.mentors;
-    state.roundCandidates = [];
-    state.pendingCandidates = [];
-    state.discardedCandidates = state.discardedCandidates || [];
+    if (data.discardedCandidates) {
+      state.discardedCandidates = data.discardedCandidates;
+    }
     modelsDialog.close();
+    await loadRoom(state.conversation.id, { keepDraft: true });
     const pendingSend = state.composerDraft.trim();
     if (pendingSend && state.conversation && state.mentors.length > 0) {
       await sendTurn(pendingSend);
@@ -398,6 +439,7 @@ deleteForm.addEventListener('submit', async (event) => {
       state.roundCandidates = [];
       state.pendingCandidates = [];
       state.discardedCandidates = [];
+      clearRoomHash();
     }
     state.deleteId = null;
     deleteDialog.close();
@@ -461,10 +503,12 @@ function renderModelsList() {
   modelsList.innerHTML = filtered
     .map((m) => {
       const checked = state.selectedModelIds.has(m.id) ? 'checked' : '';
+      const atCap = state.selectedModelIds.size >= MAX_MENTORS;
+      const disabled = !state.selectedModelIds.has(m.id) && atCap ? 'disabled' : '';
       const pricing = formatPricing(m.pricing);
       return `
         <label class="model-row">
-          <input type="checkbox" data-model-id="${escapeHtml(m.id)}" ${checked} />
+          <input type="checkbox" data-model-id="${escapeHtml(m.id)}" ${checked} ${disabled} />
           <span class="meta">
             <span class="title">${escapeHtml(m.name || m.id)}</span>
             <span class="id">${escapeHtml(m.id)}</span>
@@ -482,21 +526,29 @@ function renderModelsList() {
   modelsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
     input.addEventListener('change', () => {
       const id = input.getAttribute('data-model-id');
-      if (input.checked) state.selectedModelIds.add(id);
-      else state.selectedModelIds.delete(id);
+      if (input.checked) {
+        if (state.selectedModelIds.size >= MAX_MENTORS) {
+          input.checked = false;
+          modelsStatus.textContent = `Máximo ${MAX_MENTORS} mentores por sala.`;
+          return;
+        }
+        state.selectedModelIds.add(id);
+      } else {
+        state.selectedModelIds.delete(id);
+      }
+      renderModelsList();
     });
   });
 }
 
 async function openModelsModal() {
+  if (state.loading) return;
   if (!state.apiKeyConfigured) {
     openKeyDialog({ required: true });
     return;
   }
   if (
-    state.roundCandidates.some(
-      (c) => c.status === 'pending' || c.status === 'rejected'
-    )
+    state.roundCandidates.some(isPending)
   ) {
     state.error = 'Hay opiniones por revisar. Elige o pulsa Continuar.';
     render();
@@ -555,11 +607,7 @@ async function saveRoomMeta({ title, language }) {
 }
 
 function composerDisabled() {
-  const round = state.roundCandidates || [];
-  const hasPending = round.some(
-    (x) => x.status === 'pending' || x.status === 'rejected'
-  );
-  return hasPending || state.loading;
+  return hasPendingChoices() || state.loading;
 }
 
 function composerHtml() {
@@ -605,13 +653,8 @@ async function sendTurn(content) {
     state.messages = [...state.messages, data.userMessage];
     state.roundCandidates = data.roundCandidates || data.candidates || [];
     state.pendingCandidates =
-      data.pendingCandidates ||
-      state.roundCandidates.filter(
-        (x) => x.status === 'pending' || x.status === 'rejected'
-      );
-    const firstOpen = state.roundCandidates.find(
-      (c) => c.status === 'pending' || c.status === 'rejected'
-    );
+      data.pendingCandidates || state.roundCandidates.filter(isPending);
+    const firstOpen = state.roundCandidates.find(isPending);
     state.draftTabId = (firstOpen || state.roundCandidates[0] || {}).id ?? null;
     if (data.errors?.length) {
       state.error = data.errors
@@ -700,7 +743,9 @@ function renderSidebar() {
             formatDate(c.updated_at)
           )}</span>
         </button>
-        <button type="button" class="sala-more" data-delete="${c.id}" aria-label="Eliminar">
+        <button type="button" class="sala-more" data-delete="${c.id}" aria-label="Eliminar" ${
+            state.loading && c.id === activeId ? 'disabled' : ''
+          }>
           ${ICON_MORE}
         </button>
       </li>`
@@ -783,6 +828,7 @@ function bindParams() {
 
 function renderParams(hasPending) {
   const c = state.conversation;
+  const busy = state.loading;
   const tab = state.roomTab || 'conversation';
   const discarded = state.discardedCandidates || [];
   const viewingDiscarded = tab === 'discarded';
@@ -800,7 +846,9 @@ function renderParams(hasPending) {
             .map(
               (m) => `
             <label class="chip">
-              <input type="text" value="${escapeHtml(m.name)}" data-mentor="${m.id}" aria-label="Seudónimo" />
+              <input type="text" value="${escapeHtml(m.name)}" data-mentor="${m.id}" aria-label="Seudónimo" ${
+                busy ? 'disabled' : ''
+              } />
               <span class="chip-model">${escapeHtml(selectedModelCaption(m))}</span>
             </label>`
             )
@@ -810,7 +858,7 @@ function renderParams(hasPending) {
   paramsBody.innerHTML = `
     <label class="params-field">
       Idioma
-      <select id="room-lang" class="lang-select">
+      <select id="room-lang" class="lang-select" ${busy ? 'disabled' : ''}>
         <option value="es" ${c.language === 'es' ? 'selected' : ''}>Español</option>
         <option value="en" ${c.language === 'en' ? 'selected' : ''}>Inglés</option>
       </select>
@@ -820,7 +868,7 @@ function renderParams(hasPending) {
       ${chips}
     </div>
     <button type="button" class="btn ghost btn-block" id="btn-models" ${
-      hasPending ? 'disabled' : ''
+      hasPending || busy ? 'disabled' : ''
     }>Modelos</button>
     <hr class="params-rule" />
     <div class="params-field">
@@ -862,6 +910,7 @@ function councilHtml(round, hasPending) {
       : round[0].id;
   const active = round.find((c) => c.id === activeId) || round[0];
   const selected = active.status === 'selected';
+  const busy = state.loading ? 'disabled' : '';
 
   return `
     <section class="council">
@@ -881,12 +930,12 @@ function councilHtml(round, hasPending) {
       <div class="council-actions">
         ${
           selected
-            ? `<button type="button" class="btn brick small" data-unselect="${active.id}">Desmarcar</button>`
-            : `<button type="button" class="btn primary small" data-select="${active.id}">Elegir</button>`
+            ? `<button type="button" class="btn brick small" data-unselect="${active.id}" ${busy}>Desmarcar</button>`
+            : `<button type="button" class="btn primary small" data-select="${active.id}" ${busy}>Elegir</button>`
         }
         ${
           hasPending
-            ? `<button type="button" class="btn ghost small" id="btn-dismiss">Continuar</button>`
+            ? `<button type="button" class="btn ghost small" id="btn-dismiss" ${busy}>Continuar</button>`
             : ''
         }
       </div>
@@ -957,16 +1006,11 @@ function bindCouncil(c) {
         state.messages = data.messages;
         state.roundCandidates = data.roundCandidates || [];
         state.pendingCandidates =
-          data.pendingCandidates ||
-          state.roundCandidates.filter(
-            (x) => x.status === 'pending' || x.status === 'rejected'
-          );
+          data.pendingCandidates || state.roundCandidates.filter(isPending);
         if (data.discardedCandidates) {
           state.discardedCandidates = data.discardedCandidates;
         }
-        const still = state.roundCandidates.find(
-          (x) => x.status === 'pending' || x.status === 'rejected'
-        );
+        const still = state.roundCandidates.find(isPending);
         state.draftTabId = Number(btn.getAttribute('data-select'));
         if (!state.roundCandidates.some((x) => x.id === state.draftTabId) && still) {
           state.draftTabId = still.id;
@@ -996,10 +1040,7 @@ function bindCouncil(c) {
         state.messages = data.messages;
         state.roundCandidates = data.roundCandidates || [];
         state.pendingCandidates =
-          data.pendingCandidates ||
-          state.roundCandidates.filter(
-            (x) => x.status === 'pending' || x.status === 'rejected'
-          );
+          data.pendingCandidates || state.roundCandidates.filter(isPending);
         if (data.discardedCandidates) {
           state.discardedCandidates = data.discardedCandidates;
         }
@@ -1041,9 +1082,7 @@ function renderRoomView() {
   const tab = state.roomTab || 'conversation';
   const round = state.roundCandidates || [];
   const discarded = state.discardedCandidates || [];
-  const hasPending = round.some(
-    (x) => x.status === 'pending' || x.status === 'rejected'
-  );
+  const hasPending = hasPendingChoices(round);
   const emptyThread = state.messages.length === 0 && round.length === 0;
 
   const messagesHtml = state.messages
@@ -1078,7 +1117,9 @@ function renderRoomView() {
     <div class="canvas">
       <header class="room-head">
         ${roomHeadMenuHtml()}
-        <input id="room-title" class="room-title" value="${escapeHtml(c.title)}" />
+        <input id="room-title" class="room-title" value="${escapeHtml(c.title)}" ${
+          state.loading ? 'disabled' : ''
+        } />
         <button type="button" class="btn ghost icon-only btn-params" id="btn-params" aria-label="Parámetros">
           ${ICON_EQ}
         </button>
@@ -1126,8 +1167,38 @@ function render() {
   } else {
     renderEmptyLanding();
   }
+  syncDocumentLang();
   syncShell();
 }
+
+window.addEventListener('hashchange', async () => {
+  const id = parseRoomHash();
+  if (!id) {
+    if (state.view === 'room') {
+      state.view = 'list';
+      state.conversation = null;
+      state.mentors = [];
+      state.messages = [];
+      state.roundCandidates = [];
+      state.pendingCandidates = [];
+      state.discardedCandidates = [];
+      render();
+    }
+    return;
+  }
+  if (state.conversation?.id === id) return;
+  try {
+    state.error = '';
+    await loadRoom(id);
+    render();
+  } catch (err) {
+    state.error = err.message;
+    clearRoomHash();
+    state.view = 'list';
+    state.conversation = null;
+    render();
+  }
+});
 
 async function boot() {
   try {
@@ -1136,7 +1207,16 @@ async function boot() {
     if (!ok) {
       openKeyDialog({ required: true });
     }
-    if (state.view === 'room' && state.conversation) {
+    const hashId = parseRoomHash();
+    if (hashId) {
+      try {
+        await loadRoom(hashId);
+      } catch (err) {
+        clearRoomHash();
+        state.view = 'list';
+        state.error = err.message;
+      }
+    } else if (state.view === 'room' && state.conversation) {
       await loadRoom(state.conversation.id);
     } else {
       state.view = 'list';

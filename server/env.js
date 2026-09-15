@@ -8,7 +8,7 @@ export const rootDir = path.join(__dirname, '..');
 export const envPath = path.join(rootDir, '.env');
 
 export function loadEnv() {
-  dotenv.config({ path: envPath, override: true });
+  dotenv.config({ path: envPath, override: true, quiet: true });
 }
 
 export function hasApiKey() {

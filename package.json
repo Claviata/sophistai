@@ -21,10 +21,10 @@
     "node": ">=20"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.3",
     "dompurify": "^3.4.15",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "marked": "^18.0.12"
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "marked": "^18.0.13"
   }
 }

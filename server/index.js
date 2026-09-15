@@ -73,7 +73,7 @@ app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Ruta API no encontrada' });
 });
 
-app.get('*', liveReload.sendIndex);
+app.get('/{*splat}', liveReload.sendIndex);
 
 const HOST = process.env.HOST || '127.0.0.1';
 

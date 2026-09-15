@@ -11,7 +11,11 @@ function truthy(value) {
 }
 
 export function isDebugEnabled() {
-  return truthy(process.env.SOFISTAI_DEBUG) || truthy(process.env.DEBUG);
+  return (
+    truthy(process.env.SOPHISTAI_DEBUG) ||
+    truthy(process.env.SOFISTAI_DEBUG) ||
+    truthy(process.env.DEBUG)
+  );
 }
 
 function ensureLogsDir() {
@@ -71,7 +75,7 @@ export function debugLog(event, details = {}, conversationId = null) {
     ...redact(details),
   };
 
-  const line = `[sofistai:debug] ${entry.ts} ${event}${
+  const line = `[sophistai:debug] ${entry.ts} ${event}${
     entry.conversationId != null ? ` conv=${entry.conversationId}` : ''
   }`;
   console.log(line, details && Object.keys(details).length ? redact(details) : '');

@@ -6,11 +6,26 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 const dataDir = path.join(rootDir, 'data');
-const dbPath = path.join(dataDir, 'sofistai.sqlite');
+const dbPath = path.join(dataDir, 'sophistai.sqlite');
+const legacyDbPath = path.join(dataDir, 'sofistai.sqlite');
 
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+
+function adoptLegacyDbFile(fromPath, toPath) {
+  if (fs.existsSync(toPath) || !fs.existsSync(fromPath)) return;
+  fs.renameSync(fromPath, toPath);
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    const fromSide = `${fromPath}${suffix}`;
+    const toSide = `${toPath}${suffix}`;
+    if (fs.existsSync(fromSide) && !fs.existsSync(toSide)) {
+      fs.renameSync(fromSide, toSide);
+    }
+  }
+}
+
+adoptLegacyDbFile(legacyDbPath, dbPath);
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');

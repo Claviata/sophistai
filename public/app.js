@@ -819,7 +819,7 @@ async function boot() {
       openKeyDialog({ required: true });
       main.innerHTML = `
         <section class="panel">
-          <h2 class="section-title">Bienvenido a Sofistai</h2>
+          <h2 class="section-title">Bienvenido a Sophistaí</h2>
           <p class="hint">Configura tu API key de OpenRouter para empezar.</p>
         </section>`;
       return;

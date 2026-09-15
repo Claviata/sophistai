@@ -1,4 +1,4 @@
-# Sofistai v2
+# Sophistaí
 
 Consejo local de mentores vía [OpenRouter](https://openrouter.ai). Varios modelos escuchan la misma conversación, responden en paralelo, y **tú eliges** qué opinión entra al historial.
 
@@ -37,14 +37,14 @@ Los system prompts de los mentores están siempre en **inglés**; dentro se indi
 
 ## Datos
 
-- SQLite en `data/sofistai.sqlite` (gitignored).
+- SQLite en `data/sophistai.sqlite` (gitignored).
 - Puerto por defecto: `3847` (`PORT` en `.env`).
 
 ## Debug
 
-Pon `SOFISTAI_DEBUG=1` (o `DEBUG=1`) en `.env` y reinicia. Con eso se registra cada interacción:
+Pon `SOPHISTAI_DEBUG=1` (o `DEBUG=1`) en `.env` y reinicia. Con eso se registra cada interacción:
 
-- Consola: líneas `[sofistai:debug] …`
+- Consola: líneas `[sophistai:debug] …`
 - `data/logs/app.jsonl` — todo el servidor
 - `data/logs/conversation-{id}.jsonl` — eventos de esa sala (mensajes, requests a mentores, respuestas, selección, errores)
 

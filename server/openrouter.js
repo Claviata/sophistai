@@ -14,7 +14,7 @@ function authHeaders() {
     Authorization: `Bearer ${key}`,
     'Content-Type': 'application/json',
     'HTTP-Referer': 'http://localhost:3847',
-    'X-Title': 'Sofistai',
+    'X-Title': 'Sophistaí',
   };
 }
 

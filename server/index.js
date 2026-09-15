@@ -58,7 +58,7 @@ app.use(
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    name: 'sofistai',
+    name: 'sophistai',
     apiKeyConfigured: hasApiKey(),
     debug: isDebugEnabled(),
   });
@@ -78,7 +78,7 @@ app.get('/{*splat}', liveReload.sendIndex);
 const HOST = process.env.HOST || '127.0.0.1';
 
 app.listen(PORT, HOST, () => {
-  console.log(`Sofistai en http://${HOST}:${PORT}`);
+  console.log(`Sophistaí en http://${HOST}:${PORT}`);
   if (liveReload.enabled) {
     console.log('Live reload: CSS en caliente; HTML/JS recargan la página');
   }

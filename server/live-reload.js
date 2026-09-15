@@ -31,6 +31,7 @@ const CLIENT_JS = `(function () {
 export function isLiveReloadEnabled() {
   return (
     process.env.NODE_ENV !== 'production' &&
+    process.env.SOPHISTAI_LIVE_RELOAD !== '0' &&
     process.env.SOFISTAI_LIVE_RELOAD !== '0'
   );
 }

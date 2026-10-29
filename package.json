@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.17",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "marked": "^18.0.13"
